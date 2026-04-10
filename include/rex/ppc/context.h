@@ -50,6 +50,11 @@ PPCFunc* ResolveIndirectFunction(uint32_t guest_address);
 #define REX_FUNC(x) void x([[maybe_unused]] PPCContext& __restrict ctx, uint8_t* base)
 #define REX_EXTERN(x) extern "C" REX_FUNC(x)
 #define REX_WEAK_FUNC(x) __attribute__((weak, noinline)) REX_FUNC(x)
+// NOTE: 0.7.5+ moved PPC_LOOKUP_FUNC, PPC_CALL_INDIRECT_FUNC, PPC_FUNC_PROLOGUE,
+// and PPC_UNIMPLEMENTED into the generated init.h template
+// (resources/templates/codegen/init_h.inja). The HollywoodAkeem "log + return 0"
+// fallback for missing indirect calls and the rex_log_missing_func file logger
+// are re-applied there, not here.
 
 //=============================================================================
 // Function Mapping

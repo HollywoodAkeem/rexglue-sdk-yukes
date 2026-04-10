@@ -747,7 +747,8 @@ u32 IoSynchronousDeviceIoControlRequest_entry(u32 ioctl, mapped_void device_obje
 }
 
 u32 StfsCreateDevice_entry(mapped_void device_object, u32 flags, mapped_u32 out_device) {
-  REXKRNL_WARN("StfsCreateDevice - stub");
+  REXKRNL_WARN("StfsCreateDevice(device_object={:#x}, flags={:#x}) - stub",
+               (uint32_t)device_object.guest_address(), (uint32_t)flags);
   // if (out_device) *out_device = 0;
   return X_STATUS_SUCCESS;
 }

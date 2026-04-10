@@ -71,8 +71,10 @@ u32 XMACreateContext_entry(mapped_u32 context_out_ptr) {
   uint32_t context_ptr = xma_decoder->AllocateContext();
   *context_out_ptr = context_ptr;
   if (!context_ptr) {
+    REXKRNL_WARN("XMACreateContext FAILED: no free XMA contexts available");
     return X_STATUS_NO_MEMORY;
   }
+  REXKRNL_DEBUG("XMACreateContext result: context_ptr={:#x}", context_ptr);
   return X_STATUS_SUCCESS;
 }
 

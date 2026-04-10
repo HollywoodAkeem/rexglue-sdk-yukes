@@ -351,11 +351,23 @@ u32 XamUserWriteProfileSettings_entry(u32 title_id, u32 user_index, u32 setting_
         user_profile->AddSetting(
             std::make_unique<xam::UserProfile::BinarySetting>(setting.setting_id, bytes));
       } break;
+      case UserProfile::Setting::Type::INT32: {
+        user_profile->AddSetting(
+            std::make_unique<xam::UserProfile::Int32Setting>(setting.setting_id, setting.data.s32));
+      } break;
+      case UserProfile::Setting::Type::INT64: {
+        user_profile->AddSetting(
+            std::make_unique<xam::UserProfile::Int64Setting>(setting.setting_id, setting.data.s64));
+      } break;
+      case UserProfile::Setting::Type::FLOAT: {
+        user_profile->AddSetting(
+            std::make_unique<xam::UserProfile::FloatSetting>(setting.setting_id, setting.data.f32));
+      } break;
+      case UserProfile::Setting::Type::DOUBLE: {
+        user_profile->AddSetting(
+            std::make_unique<xam::UserProfile::DoubleSetting>(setting.setting_id, setting.data.f64));
+      } break;
       case UserProfile::Setting::Type::WSTRING:
-      case UserProfile::Setting::Type::DOUBLE:
-      case UserProfile::Setting::Type::FLOAT:
-      case UserProfile::Setting::Type::INT32:
-      case UserProfile::Setting::Type::INT64:
       case UserProfile::Setting::Type::DATETIME:
       default: {
         REXKRNL_ERROR("XamUserWriteProfileSettings: Unimplemented data type {}", setting_type);
