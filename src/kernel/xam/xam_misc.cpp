@@ -8,6 +8,7 @@
  *              See LICENSE file in the project root for full license text.
  */
 
+#include <rex/chrono/clock.h>
 #include <rex/kernel/xam/private.h>
 #include <rex/logging.h>
 #include <rex/hook.h>
@@ -123,8 +124,24 @@ REX_EXPORT_STUB(__imp__GetModuleHandleA);
 REX_EXPORT_STUB(__imp__GetOverlappedResult);
 REX_EXPORT_STUB(__imp__GetProcessHeap);
 REX_EXPORT_STUB(__imp__GetSystemTime);
-REX_EXPORT_STUB(__imp__GetSystemTimeAsFileTime);
-REX_EXPORT_STUB(__imp__GetTickCount);
+// GetSystemTimeAsFileTime - writes guest FILETIME to pointer
+static void GetSystemTimeAsFileTime_impl(ppc_pu64_t filetime_ptr) {
+  static bool logged = false;
+  if (!logged) { REXSYS_INFO("XAM GetSystemTimeAsFileTime called"); logged = true; }
+  if (filetime_ptr) {
+    *filetime_ptr = rex::chrono::Clock::QueryGuestSystemTime();
+  }
+}
+XAM_EXPORT(__imp__GetSystemTimeAsFileTime, GetSystemTimeAsFileTime_impl);
+
+// GetTickCount - returns milliseconds since guest boot
+static ppc_u32_result_t GetTickCount_impl() {
+  static bool logged = false;
+  if (!logged) { REXSYS_INFO("XAM GetTickCount called - returning {} ms",
+                              rex::chrono::Clock::QueryGuestUptimeMillis()); logged = true; }
+  return rex::chrono::Clock::QueryGuestUptimeMillis();
+}
+XAM_EXPORT(__imp__GetTickCount, GetTickCount_impl);
 REX_EXPORT_STUB(__imp__GetTimeZoneInformation);
 REX_EXPORT_STUB(__imp__InjectConnectionServerNotification);
 REX_EXPORT_STUB(__imp__IsBadReadPtr);
@@ -138,8 +155,25 @@ REX_EXPORT_STUB(__imp__PIXAddCounter);
 REX_EXPORT_STUB(__imp__PIXBeginCapture);
 REX_EXPORT_STUB(__imp__PIXEndCapture);
 REX_EXPORT_STUB(__imp__PIXGetGPUSlot);
-REX_EXPORT_STUB(__imp__QueryPerformanceCounter);
-REX_EXPORT_STUB(__imp__QueryPerformanceFrequency);
+// QueryPerformanceCounter - returns guest tick count via pointer to LARGE_INTEGER
+static ppc_u32_result_t QueryPerformanceCounter_impl(ppc_pu64_t counter_ptr) {
+  static bool logged = false;
+  if (!logged) { REXSYS_INFO("XAM QueryPerformanceCounter called"); logged = true; }
+  if (counter_ptr) {
+    *counter_ptr = rex::chrono::Clock::QueryGuestTickCount();
+  }
+  return 1;  // TRUE = success
+}
+XAM_EXPORT(__imp__QueryPerformanceCounter, QueryPerformanceCounter_impl);
+
+// QueryPerformanceFrequency - returns guest tick frequency via pointer to LARGE_INTEGER
+static ppc_u32_result_t QueryPerformanceFrequency_impl(ppc_pu64_t frequency_ptr) {
+  if (frequency_ptr) {
+    *frequency_ptr = rex::chrono::Clock::guest_tick_frequency();
+  }
+  return 1;  // TRUE = success
+}
+XAM_EXPORT(__imp__QueryPerformanceFrequency, QueryPerformanceFrequency_impl);
 REX_EXPORT_STUB(__imp__RaiseException);
 REX_EXPORT_STUB(__imp__Refresh);
 REX_EXPORT_STUB(__imp__Refresh_);
