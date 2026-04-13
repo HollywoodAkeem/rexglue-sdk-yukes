@@ -150,6 +150,12 @@ ppc_u32_result_t xeXamContentCreate(ppc_u32_t user_index, ppc_pchar_t root_name,
               license_mask_ptr](uint32_t& extended_error, uint32_t& length) -> X_RESULT {
     X_RESULT result = X_ERROR_INVALID_PARAMETER;
     kDispositionState disposition = kDispositionState::Unknown;
+
+    // Close any existing mount under this root name first.
+    // Games may reuse the same root without explicitly closing
+    // (e.g. SVR07 re-opens profile0 many times without closing).
+    content_manager->CloseContent(root_name);
+
     switch (flags & 0xF) {
       case 1:  // CREATE_NEW
                // Fail if exists.
@@ -160,15 +166,9 @@ ppc_u32_result_t xeXamContentCreate(ppc_u32_t user_index, ppc_pchar_t root_name,
         }
         break;
       case 2:  // CREATE_ALWAYS
-               // Overwrite existing, if any.
-        // Close any existing mount under this root name first.
-        // Games may reuse the same root without explicitly closing.
-        content_manager->CloseContent(root_name);
-        if (content_manager->ContentExists(xuid, content_data)) {
-          content_manager->DeleteContent(xuid, content_data);
-        }
-        // Check filesystem state after deletion attempt to decide
-        // whether to create fresh or open existing.
+               // On Xbox 360, CREATE_ALWAYS opens existing content or creates new.
+               // Do NOT delete existing files - games rely on them persisting
+               // across repeated CREATE_ALWAYS calls (e.g. SVR07 save system).
         if (content_manager->ContentExists(xuid, content_data)) {
           disposition = kDispositionState::Open;
         } else {
@@ -196,7 +196,6 @@ ppc_u32_result_t xeXamContentCreate(ppc_u32_t user_index, ppc_pchar_t root_name,
         if (!content_manager->ContentExists(xuid, content_data)) {
           result = X_ERROR_PATH_NOT_FOUND;
         } else {
-          content_manager->CloseContent(root_name);
           content_manager->DeleteContent(xuid, content_data);
           if (content_manager->ContentExists(xuid, content_data)) {
             disposition = kDispositionState::Open;

@@ -19,6 +19,7 @@
 #include <rex/filesystem/devices/host_path_device.h>
 #include <rex/string.h>
 #include <rex/system/kernel_state.h>
+#include <rex/logging.h>
 #include <rex/system/xam/content_manager.h>
 #include <rex/system/xfile.h>
 #include <rex/system/xobject.h>
@@ -41,6 +42,9 @@ ContentPackage::ContentPackage(KernelState* kernel_state, const std::string_view
     : kernel_state_(kernel_state), root_name_(root_name), package_path_(package_path), license_(0) {
   device_path_ = fmt::format("\\Device\\Content\\{0}\\", ++content_device_id_);
   content_data_ = data;
+
+  REXSYS_INFO("ContentPackage: root='{}' device='{}' host_path='{}'",
+              root_name, device_path_, package_path.string());
 
   auto fs = kernel_state_->file_system();
   auto device =
@@ -250,15 +254,20 @@ X_RESULT ContentManager::ReadContentHeaderFile(const std::string_view file_name,
 
 X_RESULT ContentManager::CreateContent(const std::string_view root_name, uint64_t xuid,
                                        const XCONTENT_AGGREGATE_DATA& data) {
+  REXSYS_INFO("CreateContent: root='{}' xuid={:016X} file='{}' root_path='{}'",
+              root_name, xuid, data.file_name(), root_path_.string());
   {
     auto global_lock = global_critical_region_.Acquire();
     if (open_packages_.count(string::string_key_case(root_name))) {
+      REXSYS_WARN("CreateContent: '{}' already open", root_name);
       return X_ERROR_ALREADY_EXISTS;
     }
   }
 
   auto package_path = ResolvePackagePath(xuid, data);
+  REXSYS_INFO("CreateContent: resolved package_path='{}'", package_path.string());
   if (std::filesystem::exists(package_path)) {
+    REXSYS_WARN("CreateContent: path already exists on disk");
     return X_ERROR_ALREADY_EXISTS;
   }
   if (!std::filesystem::create_directories(package_path)) {
@@ -280,15 +289,20 @@ X_RESULT ContentManager::CreateContent(const std::string_view root_name, uint64_
 X_RESULT ContentManager::OpenContent(const std::string_view root_name, uint64_t xuid,
                                      const XCONTENT_AGGREGATE_DATA& data,
                                      uint32_t& content_license) {
+  REXSYS_INFO("OpenContent: root='{}' xuid={:016X} file='{}' root_path='{}'",
+              root_name, xuid, data.file_name(), root_path_.string());
   {
     auto global_lock = global_critical_region_.Acquire();
     if (open_packages_.count(string::string_key_case(root_name))) {
+      REXSYS_WARN("OpenContent: '{}' already open", root_name);
       return X_ERROR_ALREADY_EXISTS;
     }
   }
 
   auto package_path = ResolvePackagePath(xuid, data);
+  REXSYS_INFO("OpenContent: resolved package_path='{}'", package_path.string());
   if (!std::filesystem::exists(package_path)) {
+    REXSYS_WARN("OpenContent: path does not exist on disk");
     return X_ERROR_FILE_NOT_FOUND;
   }
   auto package = ResolvePackage(root_name, xuid, data);
