@@ -141,6 +141,10 @@ ppc_u32_result_t xeXamContentCreate(ppc_u32_t user_index, ppc_pchar_t root_name,
 
   auto content_manager = REX_KERNEL_STATE()->content_manager();
 
+  REXKRNL_INFO("XamContentCreate: root='{}' flags={} file='{}' type={:#x} xuid={:016X}",
+               root_name.value(), uint32_t(flags) & 0xF, content_data.file_name(),
+               uint32_t(XContentType(content_data.content_type)), xuid);
+
   if (overlapped_ptr && disposition_ptr) {
     *disposition_ptr = 0;
   }
@@ -212,11 +216,16 @@ ppc_u32_result_t xeXamContentCreate(ppc_u32_t user_index, ppc_pchar_t root_name,
     uint32_t content_license = 0;
     if (disposition == kDispositionState::Create) {
       result = content_manager->CreateContent(root_name, xuid, content_data);
+      REXKRNL_INFO("XamContentCreate: root='{}' -> CREATE result=0x{:08X}", root_name, result);
       if (XSUCCEEDED(result)) {
         content_manager->WriteContentHeaderFile(xuid, content_data);
       }
     } else if (disposition == kDispositionState::Open) {
       result = content_manager->OpenContent(root_name, xuid, content_data, content_license);
+      REXKRNL_INFO("XamContentCreate: root='{}' -> OPEN result=0x{:08X}", root_name, result);
+    } else {
+      REXKRNL_WARN("XamContentCreate: root='{}' -> FAILED before mount, result=0x{:08X}",
+                    root_name, result);
     }
 
     if (license_mask_ptr && XSUCCEEDED(result)) {
@@ -236,7 +245,13 @@ ppc_u32_result_t xeXamContentCreate(ppc_u32_t user_index, ppc_pchar_t root_name,
     uint32_t extended_error, length;
     return run(extended_error, length);
   } else {
-    REX_KERNEL_STATE()->CompleteOverlappedDeferredEx(run, overlapped_ptr.guest_address());
+    // Run synchronously even for overlapped calls.
+    // On real Xbox 360, local content operations complete instantly and games
+    // (e.g. SVR07) read disposition_ptr right after the call returns, before
+    // the overlapped would normally complete on a deferred thread.
+    uint32_t extended_error, length;
+    auto result = run(extended_error, length);
+    REX_KERNEL_STATE()->CompleteOverlappedImmediate(overlapped_ptr.guest_address(), result);
     return X_ERROR_IO_PENDING;
   }
 }
@@ -289,6 +304,7 @@ ppc_u32_result_t XamContentFlush_entry(ppc_pchar_t root_name, ppc_pvoid_t overla
 
 ppc_u32_result_t XamContentClose_entry(ppc_pchar_t root_name, ppc_pvoid_t overlapped_ptr) {
   // Closes a previously opened root from XamContentCreate*.
+  REXKRNL_INFO("XamContentClose: root='{}'", root_name.value());
   auto result = REX_KERNEL_STATE()->content_manager()->CloseContent(root_name.value());
 
   if (overlapped_ptr) {

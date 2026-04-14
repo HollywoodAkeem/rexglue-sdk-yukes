@@ -170,8 +170,18 @@ ppc_u32_result_t NtCreateFile_entry(ppc_pu32_t handle_out, ppc_u32_t desired_acc
 
   *handle_out = handle;
   if (XFAILED(result)) {
+    // Always log failures for content paths so we can debug save issues.
+    if (target_path.find("profile") != std::string::npos ||
+        target_path.find("Content") != std::string::npos) {
+      REXKRNL_WARN("NtCreateFile FAILED: path='{}' disp={} -> status={:#010x}",
+                     target_path, (uint32_t)creation_disposition, result);
+    }
     REXKRNL_IMPORT_FAIL("NtCreateFile", "path='{}' -> {:#x}", target_path, result);
   } else {
+    if (target_path.find("profile") != std::string::npos) {
+      REXKRNL_INFO("NtCreateFile OK: path='{}' disp={} handle={:#x}",
+                    target_path, (uint32_t)creation_disposition, handle);
+    }
     REXKRNL_IMPORT_RESULT("NtCreateFile", "{:#x} handle={:#x}", result, handle);
   }
   return result;
