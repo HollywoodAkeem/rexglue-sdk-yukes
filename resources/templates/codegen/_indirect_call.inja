@@ -7,6 +7,13 @@
 // REX_THUNK_RESERVE_SIZE) range; out-of-bounds targets and in-bounds
 // unregistered slots fall back to rex::runtime::ResolveIndirectFunction,
 // which queries the global FunctionDispatcher across every loaded module.
+//
+// HollywoodAkeem tweak: if the cross-module dispatcher ALSO returns nullptr,
+// instead of null-deref'ing and crashing, append the unique guest address
+// to ./missing_funcs.log, emit a REXSYS_ERROR, and set r3=0 so the caller
+// gets a (probably wrong) but non-crashing return value. Lets us iterate
+// on missing functions one at a time from runtime logs without the game
+// hard-crashing on every miss.
 //=============================================================================
 
 #ifdef REXGLUE_ENABLE_PROFILING
@@ -15,6 +22,27 @@
 #else
 #define REX_PROFILE_INDIRECT_DISPATCH()
 #endif
+
+// HollywoodAkeem tweak: track unique missing-function guest addresses in
+// ./missing_funcs.log (file truncated each game launch via std::ios::trunc).
+// Static function-local statics keep the file open for the lifetime of the
+// game, and the unordered_set deduplicates so a function called 10,000x in
+// a loop only produces one log line. Each project gets its own log because
+// CWD is set to the exe's build dir on launch.
+#include <fstream>
+#include <iomanip>
+#include <mutex>
+#include <unordered_set>
+inline void rex_log_missing_func(uint32_t addr) {
+  static std::ofstream log("missing_funcs.log", std::ios::out | std::ios::trunc);
+  static std::unordered_set<uint32_t> seen;
+  static std::mutex mtx;
+  std::lock_guard<std::mutex> lock(mtx);
+  if (seen.insert(addr).second && log) {
+    log << "0x" << std::hex << std::setw(8) << std::setfill('0') << addr << '\n';
+    log.flush();
+  }
+}
 
 #define REX_LOOKUP_FUNC(x, y) \
   (*(PPCFunc**)(x + REX_IMAGE_BASE + REX_IMAGE_SIZE + (u64(u32(y) - REX_CODE_BASE) * 2)))
@@ -34,5 +62,13 @@
       ctx.last_indirect_target = rex_indirect_target_;                                     \
       rex_indirect_func_ = rex::runtime::ResolveIndirectFunction(rex_indirect_target_);    \
     }                                                                                      \
-    rex_indirect_func_(ctx, base);                                                         \
+    if (!rex_indirect_func_) [[unlikely]] {                                                \
+      /* HollywoodAkeem: log + soft-return-0 instead of null-deref crash. */               \
+      rex_log_missing_func(rex_indirect_target_);                                          \
+      REXSYS_ERROR("REX_CALL_INDIRECT_FUNC: missing function at guest "                    \
+                   "address {:#010x}, returning 0", rex_indirect_target_);                 \
+      ctx.r3.s64 = 0;                                                                      \
+    } else {                                                                               \
+      rex_indirect_func_(ctx, base);                                                       \
+    }                                                                                      \
   } while (0)
