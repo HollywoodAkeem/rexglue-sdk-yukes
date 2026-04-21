@@ -1168,7 +1168,8 @@ bool BaseHeap::AllocRange(uint32_t low_address, uint32_t high_address, uint32_t 
 
   uint32_t available_page_count = high_page_number - low_page_number + 1;
   if (!page_count || page_count > available_page_count) {
-    REXSYS_ERROR("BaseHeap::Alloc page count too big for requested range");
+    // HollywoodAkeem: demoted — expected during game memory probe
+    REXSYS_DEBUG("BaseHeap::Alloc page count too big for requested range");
     return false;
   }
 
@@ -1183,7 +1184,8 @@ bool BaseHeap::AllocRange(uint32_t low_address, uint32_t high_address, uint32_t 
   uint32_t page_scan_stride = alignment >> page_size_shift_;
   uint32_t max_base_page_number = high_page_number + 1 - page_count;
   if (heap_base_ == 0 && heap_type_ == memory::HeapType::kGuestPhysical) {
-    REXSYS_ERROR("AllocRange entry: top_down={} max_base={} low={} high={} stride={} size={:#x}",
+    // HollywoodAkeem: demoted — diagnostic dump spams during memory probe
+    REXSYS_DEBUG("AllocRange entry: top_down={} max_base={} low={} high={} stride={} size={:#x}",
                  top_down, max_base_page_number, low_page_number, high_page_number, page_scan_stride, size);
   }
   if (top_down) {
@@ -1279,7 +1281,8 @@ bool BaseHeap::AllocRange(uint32_t low_address, uint32_t high_address, uint32_t 
             uint32_t run_start = p;
             uint32_t run_state = page_table_[p].state;
             while (p <= high_page_number && page_table_[p].state != 0) ++p;
-            REXSYS_ERROR("  occupied run pages {}-{} (addr {:#x}-{:#x}) state={:#x}",
+            // HollywoodAkeem: demoted — page-run dump spams during memory probe
+            REXSYS_DEBUG("  occupied run pages {}-{} (addr {:#x}-{:#x}) state={:#x}",
                          run_start, p - 1,
                          heap_base_ + (run_start << page_size_shift_),
                          heap_base_ + ((p - 1) << page_size_shift_),
@@ -1288,7 +1291,8 @@ bool BaseHeap::AllocRange(uint32_t low_address, uint32_t high_address, uint32_t 
           } else {
             uint32_t free_start = p;
             while (p <= high_page_number && page_table_[p].state == 0) ++p;
-            REXSYS_ERROR("  free run pages {}-{} (addr {:#x}-{:#x})",
+            // HollywoodAkeem: demoted — page-run dump spams during memory probe
+            REXSYS_DEBUG("  free run pages {}-{} (addr {:#x}-{:#x})",
                          free_start, p - 1,
                          heap_base_ + (free_start << page_size_shift_),
                          heap_base_ + ((p - 1) << page_size_shift_));
@@ -1340,7 +1344,8 @@ bool BaseHeap::AllocRange(uint32_t low_address, uint32_t high_address, uint32_t 
 
   // Trace all successful allocations on the physical parent heap (heap_base_==0)
   if (heap_base_ == 0 && heap_type_ == memory::HeapType::kGuestPhysical) {
-    REXSYS_ERROR("phys AllocRange: addr={:#x} size={:#x} pages={}-{} alloc_type={:#x}",
+    // HollywoodAkeem: demoted — this is a SUCCESS trace, not an error
+    REXSYS_DEBUG("phys AllocRange: addr={:#x} size={:#x} pages={}-{} alloc_type={:#x}",
                  *out_address, size, start_page_number, end_page_number, allocation_type);
   }
 
@@ -1690,7 +1695,8 @@ bool PhysicalHeap::Alloc(uint32_t size, uint32_t alignment, uint32_t allocation_
   uint32_t parent_address;
   if (!parent_heap_->AllocRange(parent_heap_start, parent_heap_end, size, alignment,
                                 allocation_type, protect, top_down, &parent_address)) {
-    REXSYS_ERROR("PhysicalHeap::Alloc unable to alloc physical memory in parent heap");
+    // HollywoodAkeem: demoted — expected during game memory probe
+    REXSYS_DEBUG("PhysicalHeap::Alloc unable to alloc physical memory in parent heap");
     return false;
   }
 
@@ -1720,7 +1726,8 @@ bool PhysicalHeap::AllocFixed(uint32_t base_address, uint32_t size, uint32_t ali
   // TODO(benvanik): flag for ensure-not-committed?
   uint32_t parent_base_address = GetPhysicalAddress(base_address);
   if (!parent_heap_->AllocFixed(parent_base_address, size, alignment, allocation_type, protect)) {
-    REXSYS_ERROR("PhysicalHeap::Alloc unable to alloc physical memory in parent heap");
+    // HollywoodAkeem: demoted — expected during game memory probe
+    REXSYS_DEBUG("PhysicalHeap::Alloc unable to alloc physical memory in parent heap");
     return false;
   }
 
@@ -1755,7 +1762,8 @@ bool PhysicalHeap::AllocRange(uint32_t low_address, uint32_t high_address, uint3
   uint32_t parent_address;
   if (!parent_heap_->AllocRange(parent_low_address, parent_high_address, size, alignment,
                                 allocation_type, protect, top_down, &parent_address)) {
-    REXSYS_ERROR("PhysicalHeap::Alloc unable to alloc physical memory in parent heap");
+    // HollywoodAkeem: demoted — expected during game memory probe
+    REXSYS_DEBUG("PhysicalHeap::Alloc unable to alloc physical memory in parent heap");
     return false;
   }
 

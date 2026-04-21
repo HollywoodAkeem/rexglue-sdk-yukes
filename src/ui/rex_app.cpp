@@ -40,6 +40,13 @@
 
 #include <fmt/format.h>
 #include <imgui.h>
+#include <cstdio>
+#include <ios>
+
+#ifdef _WIN32
+// Avoid pulling in <windows.h> just for AllocConsole — declare it ourselves.
+extern "C" __declspec(dllimport) int __stdcall AllocConsole(void);
+#endif
 
 #include <algorithm>
 #include <filesystem>
@@ -127,6 +134,22 @@ bool ReXApp::SetupEnvironment() {
   std::string log_level_str = REXCVAR_GET(log_level);
   if (REXCVAR_GET(log_verbose) && log_level_str == "info")
     log_level_str = "trace";
+
+  // HollywoodAkeem tweak: if user opted in via <project>.toml `enable_console = true`,
+  // allocate a Windows console window and reattach the C runtime stdio handles
+  // BEFORE InitLogging so the spdlog stdout_color_sink_mt has a real terminal to
+  // write to. No-op on non-Windows or when disabled.
+#ifdef _WIN32
+  if (REXCVAR_GET(enable_console)) {
+    if (AllocConsole()) {
+      FILE* dummy;
+      freopen_s(&dummy, "CONOUT$", "w", stdout);
+      freopen_s(&dummy, "CONOUT$", "w", stderr);
+      freopen_s(&dummy, "CONIN$", "r", stdin);
+      std::ios::sync_with_stdio(true);
+    }
+  }
+#endif
 
   auto category_levels = rex::ParseCategoryLevelsFromConfig(config_path_);
   auto log_config = rex::BuildLogConfig(log_file_cvar.empty() ? nullptr : log_file_cvar.c_str(),

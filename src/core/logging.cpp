@@ -43,6 +43,14 @@ REXCVAR_DEFINE_BOOL(log_verbose, false, "Log", "Enable verbose logging (sets lev
 
 REXCVAR_DEFINE_BOOL(log_noisy, false, "Log", "Enable noisy/high-frequency log macros");
 
+// HollywoodAkeem tweak: 0.7.5 dropped the AllocConsole-based stdout sink for
+// Windows GUI apps. Re-add via opt-in cvar — when true, rex_app calls
+// AllocConsole + redirects stdio before InitLogging, and BuildLogConfig sets
+// log_to_console=true so the existing stdout_color_sink_mt activates.
+REXCVAR_DEFINE_BOOL(enable_console, false, "Log",
+                    "Allocate a console window and route logs to colored stdout (Windows GUI apps)")
+    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
+
 REXCVAR_DEFINE_INT32(log_flush_interval, 0, "Log", "Periodic flush interval in seconds (0 = off)")
     .range(0, 60)
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);
@@ -498,6 +506,7 @@ LogConfig BuildLogConfig(const char* log_file, const std::string& cli_level,
                          const std::map<std::string, std::string>& category_levels) {
   LogConfig config;
   config.log_file = log_file;
+  config.log_to_console = REXCVAR_GET(enable_console);
 
   // Build-type default
   config.default_level = kDefaultLogLevel;
