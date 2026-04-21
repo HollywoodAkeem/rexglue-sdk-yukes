@@ -26,7 +26,7 @@
 namespace rex::kernel::xboxkrnl {
 using namespace rex::system;
 
-static inline ppc_u32_t NormalizeDebugMemory(const char* fn, ppc_u32_t debug_memory) {
+static inline u32 NormalizeDebugMemory(const char* fn, u32 debug_memory) {
   if ((uint32_t)debug_memory != 0) {
     REXKRNL_WARN("{}: forcing debug_memory {} -> 0", fn, (uint32_t)debug_memory);
     return 0;
@@ -426,7 +426,10 @@ u32 MmAllocatePhysicalMemoryEx_entry(u32 flags, u32 region_size, u32 protect_bit
   uint32_t base_address = 0;
   if (!heap->AllocRange(heap_min_addr, heap_max_addr, adjusted_size, adjusted_alignment,
                         allocation_type, protect, top_down, &base_address)) {
-    REXKRNL_ERROR(
+    // HollywoodAkeem: demoted — games' normal memory-probe pattern triggers
+    // thousands of these at startup; actual hard failures are still caught
+    // by the caller (return 0 triggers game-side retry or fatal).
+    REXKRNL_DEBUG(
         "MmAllocatePhysicalMemoryEx FAILED: size={:#x} align={:#x} min={:#x} max={:#x} "
         "heap_min={:#x} heap_max={:#x} page_size={:#x}",
         adjusted_size, adjusted_alignment,

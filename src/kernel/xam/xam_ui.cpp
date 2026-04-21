@@ -547,11 +547,11 @@ u32 XamShowCommunitySessionsUI_entry(u32 r3, u32 r4) {
   return X_ERROR_FUNCTION_FAILED;
 }
 
-ppc_u32_result_t XamShowMessageBoxUIEx_entry(ppc_u32_t user_index, ppc_pchar16_t title_ptr,
-                                              ppc_pchar16_t text_ptr, ppc_u32_t button_count,
-                                              ppc_pu32_t button_ptrs, ppc_u32_t active_button,
-                                              ppc_u32_t flags, ppc_pu32_t result_ptr,
-                                              ppc_pvoid_t overlapped) {
+u32 XamShowMessageBoxUIEx_entry(u32 user_index, mapped_wstring title_ptr,
+                                              mapped_wstring text_ptr, u32 button_count,
+                                              mapped_u32 button_ptrs, u32 active_button,
+                                              u32 flags, mapped_u32 result_ptr,
+                                              mapped_void overlapped) {
   // XamShowMessageBoxUIEx has the same signature as XamShowMessageBoxUI.
   return XamShowMessageBoxUI_entry(user_index, title_ptr, text_ptr, button_count, button_ptrs,
                                    active_button, flags, result_ptr, overlapped);
