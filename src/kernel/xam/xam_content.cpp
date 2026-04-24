@@ -220,8 +220,8 @@ u32 xeXamContentCreate(u32 user_index, mapped_string root_name, mapped_void cont
       result = content_manager->OpenContent(root_name, xuid, content_data, content_license);
       REXKRNL_INFO("XamContentCreate: root='{}' -> OPEN result=0x{:08X}", root_name, result);
     } else {
-      REXKRNL_WARN("XamContentCreate: root='{}' -> FAILED before mount, result=0x{:08X}",
-                    root_name, result);
+      REXKRNL_WARN("XamContentCreate: root='{}' -> FAILED before mount, result=0x{:08X}", root_name,
+                   result);
     }
 
     if (license_mask_ptr && XSUCCEEDED(result)) {

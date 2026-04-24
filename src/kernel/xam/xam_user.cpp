@@ -364,8 +364,8 @@ u32 XamUserWriteProfileSettings_entry(u32 title_id, u32 user_index, u32 setting_
             std::make_unique<xam::UserProfile::FloatSetting>(setting.setting_id, setting.data.f32));
       } break;
       case UserProfile::Setting::Type::DOUBLE: {
-        user_profile->AddSetting(
-            std::make_unique<xam::UserProfile::DoubleSetting>(setting.setting_id, setting.data.f64));
+        user_profile->AddSetting(std::make_unique<xam::UserProfile::DoubleSetting>(
+            setting.setting_id, setting.data.f64));
       } break;
       case UserProfile::Setting::Type::WSTRING:
       case UserProfile::Setting::Type::DATETIME:

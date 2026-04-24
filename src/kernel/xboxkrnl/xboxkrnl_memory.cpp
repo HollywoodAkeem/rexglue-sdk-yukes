@@ -75,7 +75,6 @@ u32 NtAllocateVirtualMemory_entry(mapped_u32 base_addr_ptr, mapped_u32 region_si
   REXKRNL_IMPORT_TRACE(
       "NtAllocateVirtualMemory", "base={:#x} size={:#x} type={:#x} protect={:#x} debug={}",
       input_base, input_size, (uint32_t)alloc_type, (uint32_t)protect_bits, (uint32_t)debug_memory);
-  
 
   // NTSTATUS
   // _Inout_  PVOID *BaseAddress,
@@ -90,14 +89,12 @@ u32 NtAllocateVirtualMemory_entry(mapped_u32 base_addr_ptr, mapped_u32 region_si
   // Set to TRUE when allocation is from devkit memory area.
   // assert_true(debug_memory == 0);
   // just warn tf am i gunna do about it
-  if ((uint32_t)debug_memory != 0)
-  {
+  if ((uint32_t)debug_memory != 0) {
     debug_memory = NormalizeDebugMemory("NtAllocateVirtualMemory", debug_memory);
   }
-  //original code
+  // original code
   /*REXKRNL_WARN("attmpted allocation to devkit memory area (debug_memory={})",
                  (uint32_t)debug_memory);*/
-    
 
   // This allocates memory from the kernel heap, which is initialized on startup
   // and shared by both the kernel implementation and user code.
@@ -187,9 +184,11 @@ u32 NtAllocateVirtualMemory_entry(mapped_u32 base_addr_ptr, mapped_u32 region_si
   }
   if (!address) {
     // Failed - assume no memory available.
-    REXKRNL_WARN("NtAllocateVirtualMemory FAILED: input_base={:#x} adjusted_size={:#x} page_size={:#x} alloc_type={:#x} (large_pages={})",
-                 input_base, adjusted_size, page_size, (uint32_t)alloc_type,
-                 !!(alloc_type & X_MEM_LARGE_PAGES));
+    REXKRNL_WARN(
+        "NtAllocateVirtualMemory FAILED: input_base={:#x} adjusted_size={:#x} page_size={:#x} "
+        "alloc_type={:#x} (large_pages={})",
+        input_base, adjusted_size, page_size, (uint32_t)alloc_type,
+        !!(alloc_type & X_MEM_LARGE_PAGES));
     return X_STATUS_NO_MEMORY;
   }
   // Log large-page (64KB) virtual allocations at INFO so they are visible even when
@@ -226,7 +225,7 @@ u32 NtAllocateVirtualMemory_entry(mapped_u32 base_addr_ptr, mapped_u32 region_si
 u32 NtProtectVirtualMemory_entry(mapped_u32 base_addr_ptr, mapped_u32 region_size_ptr,
                                  u32 protect_bits, mapped_u32 old_protect, u32 debug_memory) {
   // Set to TRUE when this memory refers to devkit memory area.
-  //assert_true(debug_memory == 0); <-- original code
+  // assert_true(debug_memory == 0); <-- original code
   debug_memory = NormalizeDebugMemory("NtProtectVirtualMemory", debug_memory);
 
   // Must request a size.
@@ -285,7 +284,7 @@ u32 NtFreeVirtualMemory_entry(mapped_u32 base_addr_ptr, mapped_u32 region_size_p
   // _In_     BOOLEAN DebugMemory
 
   // Set to TRUE when freeing external devkit memory.
-  //assert_true(debug_memory == 0);<- original code
+  // assert_true(debug_memory == 0);<- original code
   debug_memory = NormalizeDebugMemory("NtFreeVirtualMemory", debug_memory);
 
   if (!base_addr_value) {
@@ -432,8 +431,7 @@ u32 MmAllocatePhysicalMemoryEx_entry(u32 flags, u32 region_size, u32 protect_bit
     REXKRNL_DEBUG(
         "MmAllocatePhysicalMemoryEx FAILED: size={:#x} align={:#x} min={:#x} max={:#x} "
         "heap_min={:#x} heap_max={:#x} page_size={:#x}",
-        adjusted_size, adjusted_alignment,
-        (uint32_t)min_addr_range, (uint32_t)max_addr_range,
+        adjusted_size, adjusted_alignment, (uint32_t)min_addr_range, (uint32_t)max_addr_range,
         heap_min_addr, heap_max_addr, page_size);
     return 0;
   }

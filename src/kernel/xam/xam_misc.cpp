@@ -127,7 +127,10 @@ REX_EXPORT_STUB(__imp__GetSystemTime);
 // GetSystemTimeAsFileTime - writes guest FILETIME to pointer
 static void GetSystemTimeAsFileTime_impl(mapped_u64 filetime_ptr) {
   static bool logged = false;
-  if (!logged) { REXSYS_INFO("XAM GetSystemTimeAsFileTime called"); logged = true; }
+  if (!logged) {
+    REXSYS_INFO("XAM GetSystemTimeAsFileTime called");
+    logged = true;
+  }
   if (filetime_ptr) {
     *filetime_ptr = rex::chrono::Clock::QueryGuestSystemTime();
   }
@@ -137,8 +140,11 @@ XAM_EXPORT(__imp__GetSystemTimeAsFileTime, GetSystemTimeAsFileTime_impl);
 // GetTickCount - returns milliseconds since guest boot
 static u32 GetTickCount_impl() {
   static bool logged = false;
-  if (!logged) { REXSYS_INFO("XAM GetTickCount called - returning {} ms",
-                              rex::chrono::Clock::QueryGuestUptimeMillis()); logged = true; }
+  if (!logged) {
+    REXSYS_INFO("XAM GetTickCount called - returning {} ms",
+                rex::chrono::Clock::QueryGuestUptimeMillis());
+    logged = true;
+  }
   return rex::chrono::Clock::QueryGuestUptimeMillis();
 }
 XAM_EXPORT(__imp__GetTickCount, GetTickCount_impl);
@@ -158,7 +164,10 @@ REX_EXPORT_STUB(__imp__PIXGetGPUSlot);
 // QueryPerformanceCounter - returns guest tick count via pointer to LARGE_INTEGER
 static u32 QueryPerformanceCounter_impl(mapped_u64 counter_ptr) {
   static bool logged = false;
-  if (!logged) { REXSYS_INFO("XAM QueryPerformanceCounter called"); logged = true; }
+  if (!logged) {
+    REXSYS_INFO("XAM QueryPerformanceCounter called");
+    logged = true;
+  }
   if (counter_ptr) {
     *counter_ptr = rex::chrono::Clock::QueryGuestTickCount();
   }

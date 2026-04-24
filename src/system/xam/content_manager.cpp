@@ -46,8 +46,8 @@ ContentPackage::ContentPackage(KernelState* kernel_state, const std::string_view
   device_path_ = fmt::format("\\Device\\Content\\{0}\\", ++content_device_id_);
   content_data_ = data;
 
-  REXSYS_INFO("ContentPackage: root='{}' device='{}' host_path='{}'",
-              root_name, device_path_, package_path.string());
+  REXSYS_INFO("ContentPackage: root='{}' device='{}' host_path='{}'", root_name, device_path_,
+              package_path.string());
 
   auto fs = kernel_state_->file_system();
   auto device =
@@ -261,8 +261,8 @@ X_RESULT ContentManager::ReadContentHeaderFile(const std::string_view file_name,
 
 X_RESULT ContentManager::CreateContent(const std::string_view root_name, uint64_t xuid,
                                        const XCONTENT_AGGREGATE_DATA& data) {
-  REXSYS_INFO("CreateContent: root='{}' xuid={:016X} file='{}' root_path='{}'",
-              root_name, xuid, data.file_name(), root_path_.string());
+  REXSYS_INFO("CreateContent: root='{}' xuid={:016X} file='{}' root_path='{}'", root_name, xuid,
+              data.file_name(), root_path_.string());
   {
     auto global_lock = global_critical_region_.Acquire();
     if (open_packages_.count(string::string_key_case(root_name))) {
@@ -296,8 +296,8 @@ X_RESULT ContentManager::CreateContent(const std::string_view root_name, uint64_
 X_RESULT ContentManager::OpenContent(const std::string_view root_name, uint64_t xuid,
                                      const XCONTENT_AGGREGATE_DATA& data,
                                      uint32_t& content_license) {
-  REXSYS_INFO("OpenContent: root='{}' xuid={:016X} file='{}' root_path='{}'",
-              root_name, xuid, data.file_name(), root_path_.string());
+  REXSYS_INFO("OpenContent: root='{}' xuid={:016X} file='{}' root_path='{}'", root_name, xuid,
+              data.file_name(), root_path_.string());
   {
     auto global_lock = global_critical_region_.Acquire();
     if (open_packages_.count(string::string_key_case(root_name))) {

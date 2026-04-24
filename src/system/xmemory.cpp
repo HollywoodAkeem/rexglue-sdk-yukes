@@ -1189,7 +1189,8 @@ bool BaseHeap::AllocRange(uint32_t low_address, uint32_t high_address, uint32_t 
   if (heap_base_ == 0 && heap_type_ == memory::HeapType::kGuestPhysical) {
     // HollywoodAkeem: demoted — diagnostic dump spams during memory probe
     REXSYS_DEBUG("AllocRange entry: top_down={} max_base={} low={} high={} stride={} size={:#x}",
-                 top_down, max_base_page_number, low_page_number, high_page_number, page_scan_stride, size);
+                 top_down, max_base_page_number, low_page_number, high_page_number,
+                 page_scan_stride, size);
   }
   if (top_down) {
     max_base_page_number -= max_base_page_number % page_scan_stride;
@@ -1269,10 +1270,11 @@ bool BaseHeap::AllocRange(uint32_t low_address, uint32_t high_address, uint32_t 
   }*/
   if (start_page_number == UINT_MAX || end_page_number == UINT_MAX) {
     if (heap_type_ == memory::HeapType::kGuestPhysical) {
-      REXSYS_ERROR("BaseHeap::Alloc failed (physical heap={:#x} size={:#x} align={:#x} "
-                   "low_page={} high_page={} page_count={} stride={})",
-                   heap_base_, size, alignment,
-                   low_page_number, high_page_number, page_count, page_scan_stride);
+      REXSYS_ERROR(
+          "BaseHeap::Alloc failed (physical heap={:#x} size={:#x} align={:#x} "
+          "low_page={} high_page={} page_count={} stride={})",
+          heap_base_, size, alignment, low_page_number, high_page_number, page_count,
+          page_scan_stride);
       // Dump occupied page ranges (as runs) to diagnose, skipping first GPU writeback pages
       // Find first free page then dump what's around it
       {
@@ -1283,20 +1285,19 @@ bool BaseHeap::AllocRange(uint32_t low_address, uint32_t high_address, uint32_t 
           if (page_table_[p].state != 0) {
             uint32_t run_start = p;
             uint32_t run_state = page_table_[p].state;
-            while (p <= high_page_number && page_table_[p].state != 0) ++p;
+            while (p <= high_page_number && page_table_[p].state != 0)
+              ++p;
             // HollywoodAkeem: demoted — page-run dump spams during memory probe
-            REXSYS_DEBUG("  occupied run pages {}-{} (addr {:#x}-{:#x}) state={:#x}",
-                         run_start, p - 1,
-                         heap_base_ + (run_start << page_size_shift_),
-                         heap_base_ + ((p - 1) << page_size_shift_),
-                         run_state);
+            REXSYS_DEBUG("  occupied run pages {}-{} (addr {:#x}-{:#x}) state={:#x}", run_start,
+                         p - 1, heap_base_ + (run_start << page_size_shift_),
+                         heap_base_ + ((p - 1) << page_size_shift_), run_state);
             ++run_count;
           } else {
             uint32_t free_start = p;
-            while (p <= high_page_number && page_table_[p].state == 0) ++p;
+            while (p <= high_page_number && page_table_[p].state == 0)
+              ++p;
             // HollywoodAkeem: demoted — page-run dump spams during memory probe
-            REXSYS_DEBUG("  free run pages {}-{} (addr {:#x}-{:#x})",
-                         free_start, p - 1,
+            REXSYS_DEBUG("  free run pages {}-{} (addr {:#x}-{:#x})", free_start, p - 1,
                          heap_base_ + (free_start << page_size_shift_),
                          heap_base_ + ((p - 1) << page_size_shift_));
             ++run_count;
@@ -1304,8 +1305,9 @@ bool BaseHeap::AllocRange(uint32_t low_address, uint32_t high_address, uint32_t 
         }
       }
     } else {
-      REXSYS_ERROR("BaseHeap::Alloc failed (virtual heap={:#x} size={:#x} align={:#x} pages_needed={})",
-                   heap_base_, size, alignment, page_count);
+      REXSYS_ERROR(
+          "BaseHeap::Alloc failed (virtual heap={:#x} size={:#x} align={:#x} pages_needed={})",
+          heap_base_, size, alignment, page_count);
     }
     return false;
   }
