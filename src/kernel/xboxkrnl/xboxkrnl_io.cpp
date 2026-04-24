@@ -172,14 +172,14 @@ u32 NtCreateFile_entry(mapped_u32 handle_out, u32 desired_access,
     // Always log failures for content paths so we can debug save issues.
     if (target_path.find("profile") != std::string::npos ||
         target_path.find("Content") != std::string::npos) {
-      REXKRNL_WARN("NtCreateFile FAILED: path='{}' disp={} -> status={:#010x}",
-                     target_path, (uint32_t)creation_disposition, result);
+      REXKRNL_WARN("NtCreateFile FAILED: path='{}' disp={} -> status={:#010x}", target_path,
+                   (uint32_t)creation_disposition, result);
     }
     REXKRNL_IMPORT_FAIL("NtCreateFile", "path='{}' -> {:#x}", target_path, result);
   } else {
     if (target_path.find("profile") != std::string::npos) {
-      REXKRNL_INFO("NtCreateFile OK: path='{}' disp={} handle={:#x}",
-                    target_path, (uint32_t)creation_disposition, handle);
+      REXKRNL_INFO("NtCreateFile OK: path='{}' disp={} handle={:#x}", target_path,
+                   (uint32_t)creation_disposition, handle);
     }
     REXKRNL_IMPORT_RESULT("NtCreateFile", "{:#x} handle={:#x}", result, handle);
   }
