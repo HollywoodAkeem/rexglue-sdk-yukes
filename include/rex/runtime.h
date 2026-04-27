@@ -179,4 +179,23 @@ class Runtime {
   static Runtime* instance_;
 };
 
+namespace memory {
+
+// Returns true if `guest_address` points into any committed heap region.
+//
+// Cheap pre-check used by recompiled code (and patches) to validate corrupted
+// or uninitialized guest pointers before dereferencing. Consults the actual
+// page table via Memory::LookupHeap, so it accepts any committed range and
+// rejects everything else. Far more accurate than hand-coded address ranges.
+//
+// HollywoodAkeem tweak: factored out from per-project copies in wwe13beta.
+inline bool IsValidGuestAddress(uint32_t guest_address) {
+  if (guest_address < 0x10000) return false;
+  auto* rt = rex::Runtime::instance();
+  if (!rt || !rt->memory()) return false;
+  return rt->memory()->LookupHeap(guest_address) != nullptr;
+}
+
+}  // namespace memory
+
 }  // namespace rex
