@@ -188,19 +188,30 @@ class Runtime {
 
 namespace memory {
 
-// Returns true if `guest_address` points into any committed heap region.
+// Returns true if `guest_address` points into a heap page that is fully
+// committed and readable (i.e. dereferencing it as data will not fault).
 //
 // Cheap pre-check used by recompiled code (and patches) to validate corrupted
 // or uninitialized guest pointers before dereferencing. Consults the actual
-// page table via Memory::LookupHeap, so it accepts any committed range and
-// rejects everything else. Far more accurate than hand-coded address ranges.
+// page table via Memory::LookupHeap + BaseHeap::QueryRegionInfo, so it
+// requires the page to be in the kMemoryAllocationCommit state — reserved-
+// but-uncommitted pages (e.g. address-space reservations not yet backed by
+// physical memory) correctly fail the check. Far more accurate than hand-
+// coded address ranges or QueryProtect alone, which returns the reservation's
+// access bits even for uncommitted pages.
 //
 // HollywoodAkeem tweak: factored out from per-project copies in wwe13beta.
 inline bool IsValidGuestAddress(uint32_t guest_address) {
   if (guest_address < 0x10000) return false;
   auto* rt = rex::Runtime::instance();
   if (!rt || !rt->memory()) return false;
-  return rt->memory()->LookupHeap(guest_address) != nullptr;
+  auto* heap = rt->memory()->LookupHeap(guest_address);
+  if (!heap) return false;
+  rex::memory::HeapAllocationInfo info{};
+  if (!heap->QueryRegionInfo(guest_address, &info)) return false;
+  // Page must be committed AND have non-zero access protection.
+  return (info.state & rex::memory::kMemoryAllocationCommit) != 0
+         && info.protect != 0;
 }
 
 }  // namespace memory
