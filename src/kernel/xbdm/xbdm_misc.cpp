@@ -39,7 +39,14 @@ REX_EXPORT_STUB(__imp__DmOpenNotificationSession);
 REX_EXPORT_STUB(__imp__DmOpenPerformanceCounter);
 REX_EXPORT_STUB(__imp__DmQueryPerformanceCounterHandle);
 REX_EXPORT_STUB(__imp__DmReboot);
-REX_EXPORT_STUB(__imp__DmRegisterCommandProcessor);
+// HollywoodAkeem: stub must return XBDM_NOERR (0x02DA0000) — many dev/debug builds
+// (e.g. WWE 13 Aug 27, 2012 prototype) check the return value against this exact
+// constant during early CRT init and take a "registration failed" branch when 0,
+// which silently skips creating a critical dispatch table.
+REX_STUB_RETURN(__imp__DmRegisterCommandProcessor, 0x02DA0000)
+static rex::ppc::detail::PPCFuncRegistrar
+    _ppc_reg___imp__DmRegisterCommandProcessor("__imp__DmRegisterCommandProcessor",
+                                                &__imp__DmRegisterCommandProcessor);
 REX_EXPORT_STUB(__imp__DmRegisterNotificationProcessor);
 REX_EXPORT_STUB(__imp__DmRegisterPerformanceCounter);
 REX_EXPORT_STUB(__imp__DmRemoveBreakpoint);
