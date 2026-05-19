@@ -12,6 +12,7 @@
 #include <rex/graphics/graphics_system.h>
 
 #include <algorithm>
+#include <atomic>
 #include <cctype>
 #include <cstdint>
 #include <functional>
@@ -317,8 +318,24 @@ void GraphicsSystem::SetInterruptCallback(uint32_t callback, uint32_t user_data)
 }
 
 void GraphicsSystem::DispatchInterruptCallback(uint32_t source, uint32_t cpu) {
+  // HollywoodAkeem: throttled instrumentation to confirm guest VBlank tick is alive.
+  // Logs first 3 dispatches, then every 60th (~1 line/sec at 60Hz). Also logs the
+  // first 3 times the callback is 0 so we can spot a "registered, then cleared"
+  // regression. Cheap enough to leave in shipping.
+  static std::atomic<uint64_t> dispatch_count{0};
+  static std::atomic<uint64_t> null_callback_count{0};
   if (!interrupt_callback_) {
+    uint64_t n = null_callback_count.fetch_add(1, std::memory_order_relaxed) + 1;
+    if (n <= 3) {
+      REXGPU_WARN("DispatchInterruptCallback: callback is 0 (#{}), skipping guest tick", n);
+    }
     return;
+  }
+
+  uint64_t n = dispatch_count.fetch_add(1, std::memory_order_relaxed) + 1;
+  if (n <= 3 || (n % 60) == 0) {
+    REXGPU_INFO("DispatchInterruptCallback #{} -> guest {:08X} (source={}, cpu={})", n,
+                interrupt_callback_, source, cpu);
   }
 
   auto thread = system::XThread::GetCurrentThread();
@@ -329,9 +346,6 @@ void GraphicsSystem::DispatchInterruptCallback(uint32_t source, uint32_t cpu) {
     cpu = 2;
   }
   thread->SetActiveCpu(cpu);
-
-  // REXGPU_INFO("Dispatching GPU interrupt at {:08X} w/ mode {} on cpu {}",
-  //          interrupt_callback_, source, cpu);
 
   uint64_t args[] = {source, interrupt_callback_data_};
   function_dispatcher_->ExecuteInterrupt(thread->thread_state(), interrupt_callback_, args,

@@ -14,7 +14,9 @@
 
 #include <algorithm>
 #include <atomic>
+#include <chrono>
 #include <memory>
+#include <unordered_map>
 #include <vector>
 
 #include <rex/chrono/clock.h>
@@ -111,6 +113,15 @@ u32 ExCreateThread_entry(mapped_u32 handle_ptr, u32 stack_size, mapped_u32 threa
       "ExCreateThread", "stack={:#x} xapi_startup={:#x} start={:#x} context={:#x} flags={:#x}",
       (uint32_t)stack_size, (uint32_t)xapi_thread_startup, start_address.guest_address(),
       start_context.guest_address(), (uint32_t)creation_flags);
+  // HollywoodAkeem: always-on creation log so we can map worker threads back to
+  // their guest entry point. Without this, threads.txt shows decorated rex
+  // names ("XThreadXXXX") that say nothing about what guest function the
+  // thread is actually running. The start_address here is the function we'd
+  // grep for in the recomp if a worker turns out to be the one blocking the
+  // main thread.
+  REXKRNL_WARN("[GUEST THREAD CREATE] start={:08X} ctx={:08X} stack={:#x} flags={:#x}",
+               start_address.guest_address(), start_context.guest_address(), (uint32_t)stack_size,
+               (uint32_t)creation_flags);
   // http://jafile.com/uploads/scoop/main.cpp.txt
   // DWORD
   // LPHANDLE Handle,
@@ -372,7 +383,40 @@ u32 KeQueryPerformanceFrequency_entry() {
   return static_cast<uint32_t>(result);
 }
 
+// HollywoodAkeem: hot-call tracker for time/sleep funcs that bypass our wait
+// instrumentation (no XObject involved). Each thread+function has a counter
+// and a sample-window timer. If the thread calls the same function 1000+
+// times in under a second, log it -- that's a polling/spinning loop. Normal
+// threads call these single-digit times per frame and never trip the rate.
+namespace {
+struct HotCallTracker {
+  uint32_t count = 0;
+  std::chrono::steady_clock::time_point window_start = std::chrono::steady_clock::now();
+};
+thread_local HotCallTracker tls_query_system_time;
+thread_local HotCallTracker tls_delay_execution;
+thread_local HotCallTracker tls_yield_execution;
+
+inline void TrackHotCall(HotCallTracker& tracker, const char* fn) {
+  if (++tracker.count >= 1000) {
+    auto now = std::chrono::steady_clock::now();
+    auto elapsed_ms =
+        std::chrono::duration_cast<std::chrono::milliseconds>(now - tracker.window_start).count();
+    if (elapsed_ms < 1000) {
+      auto* th = XThread::GetCurrentThread();
+      double rate = double(tracker.count) * 1000.0 / double(std::max<int64_t>(1, elapsed_ms));
+      REXKRNL_WARN("HOT CALL: {} caller='{}' (h={:08X}) count={} in {}ms (~{:.0f}/sec)", fn,
+                   th ? th->name() : "<unknown>", th ? static_cast<uint32_t>(th->handle()) : 0u,
+                   tracker.count, static_cast<int64_t>(elapsed_ms), rate);
+    }
+    tracker.count = 0;
+    tracker.window_start = now;
+  }
+}
+}  // namespace
+
 u32 KeDelayExecutionThread_entry(u32 processor_mode, u32 alertable, mapped_u64 interval_ptr) {
+  TrackHotCall(tls_delay_execution, "KeDelayExecutionThread");
   XThread* thread = XThread::GetCurrentThread();
 
   if (alertable) {
@@ -389,11 +433,13 @@ u32 KeDelayExecutionThread_entry(u32 processor_mode, u32 alertable, mapped_u64 i
 }
 
 u32 NtYieldExecution_entry() {
+  TrackHotCall(tls_yield_execution, "NtYieldExecution");
   rex::thread::MaybeYield();
   return X_STATUS_SUCCESS;
 }
 
 void KeQuerySystemTime_entry(mapped_u64 time_ptr) {
+  TrackHotCall(tls_query_system_time, "KeQuerySystemTime");
   uint64_t time = chrono::Clock::QueryGuestSystemTime();
   if (time_ptr) {
     *time_ptr = time;
@@ -523,11 +569,37 @@ u32 NtCreateEvent_entry(mapped_u32 handle_ptr, ppc_ptr_t<X_OBJECT_ATTRIBUTES> ob
   if (handle_ptr) {
     *handle_ptr = ev->handle();
   }
+  // HollywoodAkeem: log every event creation. We need to map handles to
+  // who-created-them when figuring out which event a stuck thread is waiting
+  // on. Cheap: NtCreateEvent fires <100x in typical game init.
+  {
+    auto* th = XThread::GetCurrentThread();
+    REXKRNL_WARN("[EVENT CREATE] handle={:08X} type={} initial={} caller='{}' (h={:08X})",
+                 ev->handle(), event_type ? "auto" : "manual",
+                 initial_state ? "signaled" : "non-signaled", th ? th->name() : "<unknown>",
+                 th ? static_cast<uint32_t>(th->handle()) : 0u);
+  }
   return X_STATUS_SUCCESS;
 }
 
 uint32_t xeNtSetEvent(uint32_t handle, rex::be<uint32_t>* previous_state_ptr) {
   X_STATUS result = X_STATUS_SUCCESS;
+
+  // HollywoodAkeem: log every event signal so we can spot the event that
+  // never gets set. Throttled per (handle, thread): logs the first 3 times
+  // each (thread, handle) pair signals, then every 100th. Healthy
+  // per-frame events log a couple of lines then quiet; an event that's
+  // never signaled is conspicuous by its absence.
+  {
+    thread_local std::unordered_map<uint32_t, uint32_t> tls_set_event_count;
+    uint32_t& n = tls_set_event_count[handle];
+    ++n;
+    if (n <= 3 || (n % 100) == 0) {
+      auto* th = XThread::GetCurrentThread();
+      REXKRNL_WARN("[EVENT SET] handle={:08X} #{} caller='{}' (h={:08X})", handle, n,
+                   th ? th->name() : "<unknown>", th ? static_cast<uint32_t>(th->handle()) : 0u);
+    }
+  }
 
   auto ev = REX_KERNEL_OBJECTS()->LookupObject<XEvent>(handle);
   if (ev) {
@@ -729,6 +801,21 @@ u32 NtReleaseMutant_entry(u32 mutant_handle, u32 unknown) {
   return result;
 }
 
+// HollywoodAkeem: kernel-mode variant. Was REX_EXPORT_STUB — caused WWE 2K14
+// to deadlock during match loading because the game uses Ke* (pointer-based)
+// instead of Nt* (handle-based) for releasing one of its loading mutexes
+// (Mutant 0xF8000760 in the captured 2026-05-11 session). Stub returned 0
+// (success) but the mutex was never actually released, so other threads
+// waited forever on NtWaitForSingleObjectEx → infinite loading screen.
+u32 KeReleaseMutant_entry(mapped_void mutant_ptr, u32 priority_increment, u32 abandon, u32 wait) {
+  auto mutant = XObject::GetNativeObject<XMutant>(
+      REX_KERNEL_STATE(), REX_KERNEL_MEMORY()->TranslateVirtual(mutant_ptr.guest_address()));
+  if (!mutant) {
+    return X_STATUS_INVALID_PARAMETER;
+  }
+  return mutant->ReleaseMutant(priority_increment, abandon != 0, wait != 0);
+}
+
 u32 NtCreateTimer_entry(mapped_u32 handle_ptr, mapped_void obj_attributes_ptr, u32 timer_type) {
   // timer_type = NotificationTimer (0) or SynchronizationTimer (1)
 
@@ -816,6 +903,95 @@ u32 NtCancelTimer_entry(u32 timer_handle, mapped_u32 current_state_ptr) {
   return result;
 }
 
+// HollywoodAkeem: hot-wait tracker. Spot threads stuck polling the same kernel
+// object. Each guest thread tracks the last "wait key" (guest addr for Ke* /
+// handle for Nt*) it waited on plus a consecutive-same-key counter. We log at
+// 100, 1000, 10000, then every 10000 thereafter. Threads doing healthy work
+// touch many different objects and never trip the threshold; a thread spinning
+// on a never-signaled event lights up immediately.
+namespace {
+thread_local uint64_t tls_last_wait_key = 0;
+thread_local uint32_t tls_consecutive_wait_count = 0;
+
+inline const char* XObjectTypeName(XObject::Type t) {
+  switch (t) {
+    case XObject::Type::Undefined:
+      return "Undefined";
+    case XObject::Type::Enumerator:
+      return "Enumerator";
+    case XObject::Type::Event:
+      return "Event";
+    case XObject::Type::File:
+      return "File";
+    case XObject::Type::IOCompletion:
+      return "IOCompletion";
+    case XObject::Type::Module:
+      return "Module";
+    case XObject::Type::Mutant:
+      return "Mutant";
+    case XObject::Type::NotifyListener:
+      return "NotifyListener";
+    case XObject::Type::Semaphore:
+      return "Semaphore";
+    case XObject::Type::Session:
+      return "Session";
+    case XObject::Type::Socket:
+      return "Socket";
+    case XObject::Type::SymbolicLink:
+      return "SymbolicLink";
+    case XObject::Type::Thread:
+      return "Thread";
+    case XObject::Type::Timer:
+      return "Timer";
+    default:
+      return "???";
+  }
+}
+
+// Resolve the wait target into a type+name string for logging. `is_handle`
+// distinguishes the key encoding: Nt* takes a handle, Ke* takes a guest addr.
+inline std::string DescribeWaitTarget(uint64_t key, bool is_handle) {
+  XObject* obj = nullptr;
+  object_ref<XObject> ref;
+  if (is_handle) {
+    ref = REX_KERNEL_OBJECTS()->LookupObject<XObject>(static_cast<uint32_t>(key));
+    obj = ref.get();
+  } else {
+    auto ptr = REX_KERNEL_MEMORY()->TranslateVirtual(static_cast<uint32_t>(key));
+    if (ptr) {
+      auto native = XObject::GetNativeObject<XObject>(REX_KERNEL_STATE(), ptr);
+      ref = std::move(native);
+      obj = ref.get();
+    }
+  }
+  if (!obj)
+    return "<unresolved>";
+  std::string out = XObjectTypeName(obj->type());
+  if (obj->type() == XObject::Type::Thread) {
+    const std::string& nm = obj->name();
+    if (!nm.empty()) {
+      out += " '" + nm + "'";
+    }
+  }
+  return out;
+}
+
+inline void TrackHotWait(const char* fn, uint64_t key, bool is_handle) {
+  if (key == tls_last_wait_key) {
+    uint32_t n = ++tls_consecutive_wait_count;
+    if (n == 100 || n == 1000 || n == 10000 || (n > 10000 && (n % 10000) == 0)) {
+      auto* th = XThread::GetCurrentThread();
+      REXKRNL_WARN("HOT WAIT: {} caller='{}' (h={:08X}) -> target={} key=0x{:X} consecutive=#{}",
+                   fn, th ? th->name() : "<unknown>", th ? static_cast<uint32_t>(th->handle()) : 0u,
+                   DescribeWaitTarget(key, is_handle), key, n);
+    }
+  } else {
+    tls_last_wait_key = key;
+    tls_consecutive_wait_count = 1;
+  }
+}
+}  // namespace
+
 uint32_t xeKeWaitForSingleObject(void* object_ptr, uint32_t wait_reason, uint32_t processor_mode,
                                  uint32_t alertable, uint64_t* timeout_ptr) {
   auto object = XObject::GetNativeObject<XObject>(REX_KERNEL_STATE(), object_ptr);
@@ -838,14 +1014,9 @@ uint32_t xeKeWaitForSingleObject(void* object_ptr, uint32_t wait_reason, uint32_
 u32 KeWaitForSingleObject_entry(mapped_void object_ptr, u32 wait_reason, u32 processor_mode,
                                 u32 alertable, mapped_u64 timeout_ptr) {
   uint64_t timeout = timeout_ptr ? static_cast<uint64_t>(*timeout_ptr) : 0u;
-  // REXKRNL_IMPORT_TRACE("KeWaitForSingleObject", "obj={:#x} reason={} mode={} alertable={}
-  // timeout={}",
-  // object_ptr.guest_address(), (uint32_t)wait_reason,
-  //(uint32_t)processor_mode, (uint32_t)alertable,
-  // timeout_ptr ? (int64_t)timeout : -1);
+  TrackHotWait("KeWaitForSingleObject", object_ptr.guest_address(), /*is_handle=*/false);
   auto result = xeKeWaitForSingleObject(object_ptr, wait_reason, processor_mode, alertable,
                                         timeout_ptr ? &timeout : nullptr);
-  // REXKRNL_IMPORT_RESULT("KeWaitForSingleObject", "{:#x}", result);
   return result;
 }
 
@@ -853,6 +1024,8 @@ u32 NtWaitForSingleObjectEx_entry(u32 object_handle, u32 wait_mode, u32 alertabl
                                   mapped_u64 timeout_ptr) {
   X_STATUS result = X_STATUS_SUCCESS;
 
+  TrackHotWait("NtWaitForSingleObjectEx", static_cast<uint64_t>(object_handle),
+               /*is_handle=*/true);
   auto object = REX_KERNEL_OBJECTS()->LookupObject<XObject>(object_handle);
   if (object) {
     uint64_t timeout = timeout_ptr ? static_cast<uint64_t>(*timeout_ptr) : 0u;
@@ -872,9 +1045,15 @@ u32 KeWaitForMultipleObjects_entry(u32 count, mapped_u32 objects_ptr, u32 wait_t
                                    mapped_u64 timeout_ptr, mapped_void wait_block_array_ptr) {
   assert_true(wait_type <= 1);
 
+  // Build a stable key from the (sorted-by-XOR) set of guest object pointers so
+  // the order of handles doesn't change the hot-wait key.
+  uint64_t track_key =
+      (static_cast<uint64_t>(wait_type) << 56) | (static_cast<uint64_t>(count) << 32);
   std::vector<object_ref<XObject>> objects;
   for (uint32_t n = 0; n < count; n++) {
-    auto object_ptr = REX_KERNEL_MEMORY()->TranslateVirtual(objects_ptr[n]);
+    uint32_t guest_ptr = objects_ptr[n];
+    track_key ^= static_cast<uint64_t>(guest_ptr) * 0x9E3779B97F4A7C15ull;
+    auto object_ptr = REX_KERNEL_MEMORY()->TranslateVirtual(guest_ptr);
     auto object_ref = XObject::GetNativeObject<XObject>(REX_KERNEL_STATE(), object_ptr);
     if (!object_ref) {
       return X_STATUS_INVALID_PARAMETER;
@@ -882,6 +1061,9 @@ u32 KeWaitForMultipleObjects_entry(u32 count, mapped_u32 objects_ptr, u32 wait_t
 
     objects.push_back(std::move(object_ref));
   }
+  // Multi-wait uses a synthetic XOR hash; pass is_handle=true so the resolver
+  // doesn't try (and fail) to look up the hash as a real guest pointer.
+  TrackHotWait("KeWaitForMultipleObjects", track_key, /*is_handle=*/true);
 
   uint64_t timeout = timeout_ptr ? static_cast<uint64_t>(*timeout_ptr) : 0u;
   X_STATUS result = XObject::WaitMultiple(
@@ -898,15 +1080,19 @@ uint32_t xeNtWaitForMultipleObjectsEx(uint32_t count, rex::be<uint32_t>* handles
                                       uint64_t* timeout_ptr) {
   assert_true(wait_type <= 1);
 
+  uint64_t track_key =
+      (static_cast<uint64_t>(wait_type) << 56) | (static_cast<uint64_t>(count) << 32);
   std::vector<object_ref<XObject>> objects;
   for (uint32_t n = 0; n < count; n++) {
     uint32_t object_handle = handles[n];
+    track_key ^= static_cast<uint64_t>(object_handle) * 0x9E3779B97F4A7C15ull;
     auto object = REX_KERNEL_OBJECTS()->LookupObject<XObject>(object_handle);
     if (!object) {
       return X_STATUS_INVALID_PARAMETER;
     }
     objects.push_back(std::move(object));
   }
+  TrackHotWait("NtWaitForMultipleObjectsEx", track_key, /*is_handle=*/true);
 
   auto result = XObject::WaitMultiple(count, reinterpret_cast<XObject**>(objects.data()), wait_type,
                                       6, wait_mode, alertable, timeout_ptr);
@@ -1407,7 +1593,7 @@ REX_EXPORT_STUB(__imp__KeInsertByKeyDeviceQueue);
 REX_EXPORT_STUB(__imp__KeInsertDeviceQueue);
 REX_EXPORT_STUB(__imp__KeInsertHeadQueue);
 REX_EXPORT_STUB(__imp__KeInsertQueue);
-REX_EXPORT_STUB(__imp__KeReleaseMutant);
+REX_EXPORT(__imp__KeReleaseMutant, rex::kernel::xboxkrnl::KeReleaseMutant_entry)
 REX_EXPORT_STUB(__imp__KeRemoveByKeyDeviceQueue);
 REX_EXPORT_STUB(__imp__KeRemoveDeviceQueue);
 REX_EXPORT_STUB(__imp__KeRemoveEntryDeviceQueue);

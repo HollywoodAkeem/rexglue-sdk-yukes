@@ -45,6 +45,10 @@ struct PathConfig {
   std::filesystem::path update_data_root;
   std::filesystem::path cache_root;
   std::filesystem::path config_path;
+  // HollywoodAkeem: optional emulated devkit drive root. When set, mounted as
+  // e:\ in the guest VFS. Used by dev/debug builds that read/write to e:\
+  // (assertion logs, hot-reload InstantPreview updates, etc.).
+  std::filesystem::path devkit_data_root;
 };
 
 namespace ui {
@@ -185,6 +189,7 @@ class ReXApp : public ui::WindowedApp, public ui::WindowListener, public ui::Win
   const std::filesystem::path& user_data_root() const { return user_data_root_; }
   const std::filesystem::path& update_data_root() const { return update_data_root_; }
   const std::filesystem::path& cache_root() const { return cache_root_; }
+  const std::filesystem::path& devkit_data_root() const { return devkit_data_root_; }
 
   /// Set a callback that provides guest frame stats to the debug overlay.
   void SetGuestFrameStats(ui::DebugOverlayDialog::FrameStatsProvider provider);
@@ -209,6 +214,7 @@ class ReXApp : public ui::WindowedApp, public ui::WindowListener, public ui::Win
   std::filesystem::path user_data_root_;
   std::filesystem::path update_data_root_;
   std::filesystem::path cache_root_;
+  std::filesystem::path devkit_data_root_;
   std::unique_ptr<Runtime> runtime_;
   std::unique_ptr<ui::Window> window_;
   std::thread module_thread_;

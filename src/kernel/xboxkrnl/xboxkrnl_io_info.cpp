@@ -149,12 +149,16 @@ u32 NtQueryInformationFile_entry(u32 file_handle, ppc_ptr_t<X_IO_STATUS_BLOCK> i
       break;
     }
     case XFileXctdCompressionInformation: {
-      REXKRNL_ERROR(
+      // HollywoodAkeem note (2026-05-11): tried returning SUCCESS with
+      // unknown=0 ("not compressed") to fix wwe2k14 match-loading hang —
+      // BACKFIRED: broke startup entirely (lied about compression on PAC
+      // files that ARE compressed → game read garbage). Reverted to
+      // INVALID_PARAMETER which at least lets the game start. Real fix
+      // needs us to read the file's first 4 bytes and check for the XCTD
+      // magic 0x0FF512ED. Until then, match-loading hang remains open.
+      REXKRNL_DEBUG(
           "NtQueryInformationFile(XFileXctdCompressionInformation) "
-          "unimplemented");
-      // Files that are XCTD compressed begin with the magic 0x0FF512ED but we
-      // shouldn't detect this that way. There's probably a flag somewhere
-      // (attributes?) that defines if it's compressed or not.
+          "returning INVALID_PARAMETER (real impl needs file magic check)");
       status = X_STATUS_INVALID_PARAMETER;
       out_length = 0;
       break;

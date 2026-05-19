@@ -32,6 +32,11 @@ REXCVAR_DEFINE_STRING(game_data_root, "", "Runtime", "Override game data path");
 REXCVAR_DEFINE_STRING(user_data_root, "", "Runtime", "Override user data path");
 REXCVAR_DEFINE_STRING(update_data_root, "", "Runtime", "Override update data path");
 REXCVAR_DEFINE_STRING(cache_path, "", "Runtime", "Override shader cache path");
+// HollywoodAkeem: optional emulated devkit drive root, mounted as e:\ in
+// guest VFS. Used by dev/debug builds (wwe13beta etc.) that read/write to
+// e:\ for assertion logs / hot-reload paths.
+REXCVAR_DEFINE_STRING(devkit_data_root, "", "Runtime",
+                      "Override devkit data path (mounted as e:\\)");
 
 namespace rex {
 
@@ -45,11 +50,13 @@ Runtime* Runtime::instance() {
 Runtime::Runtime(const std::filesystem::path& game_data_root,
                  const std::filesystem::path& user_data_root,
                  const std::filesystem::path& update_data_root,
-                 const std::filesystem::path& cache_root)
+                 const std::filesystem::path& cache_root,
+                 const std::filesystem::path& devkit_data_root)
     : game_data_root_(game_data_root),
       user_data_root_(user_data_root.empty() ? game_data_root : user_data_root),
       update_data_root_(update_data_root),
-      cache_root_(cache_root) {}
+      cache_root_(cache_root),
+      devkit_data_root_(devkit_data_root) {}
 
 Runtime::~Runtime() {
   Shutdown();
@@ -293,6 +300,23 @@ bool Runtime::SetupVfs() {
       if (update_device->Initialize() && file_system_->RegisterDevice(std::move(update_device))) {
         file_system_->RegisterSymbolicLink("update:", update_mount);
         REXSYS_INFO("  Mounted {} at update:", abs_update_root.string());
+      }
+    }
+  }
+
+  // HollywoodAkeem: mount devkit_data_root as e:\ if provided.
+  // Dev/debug builds use the devkit drive (e:\) for assertion logs and
+  // hot-reload paths (e.g. WWE 13's E:\WWE13Debug\OST\InstantPreview).
+  // Without this device, file-not-found errors trigger Yukes yFalse asserts.
+  if (!devkit_data_root_.empty()) {
+    auto abs_devkit_root = std::filesystem::absolute(devkit_data_root_);
+    if (std::filesystem::exists(abs_devkit_root)) {
+      auto devkit_mount = "\\Device\\Harddisk0\\PartitionDevkit";
+      auto devkit_device =
+          std::make_unique<rex::filesystem::HostPathDevice>(devkit_mount, abs_devkit_root, false);
+      if (devkit_device->Initialize() && file_system_->RegisterDevice(std::move(devkit_device))) {
+        file_system_->RegisterSymbolicLink("e:", devkit_mount);
+        REXSYS_INFO("  Mounted {} at e:", abs_devkit_root.string());
       }
     }
   }

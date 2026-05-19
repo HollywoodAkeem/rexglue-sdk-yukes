@@ -52,6 +52,9 @@ extern "C" __declspec(dllimport) int __stdcall AllocConsole(void);
 #include <filesystem>
 #include <string_view>
 
+// NOTE: cvar definitions moved to src/system/runtime.cpp in v0.8.0.
+// devkit_data_root added there too (HollywoodAkeem tweak).
+
 namespace rex {
 
 // --- ReXApp ---
@@ -106,6 +109,13 @@ bool ReXApp::SetupEnvironment() {
     update_dir = update_data_cvar;
   }
 
+  // Devkit data (mounted as e:\): cvar override, or empty (opt-in)
+  std::filesystem::path devkit_dir;
+  std::string devkit_data_cvar = REXCVAR_GET(devkit_data_root);
+  if (!devkit_data_cvar.empty()) {
+    devkit_dir = devkit_data_cvar;
+  }
+
   // Cache: cvar override, or user_dir/cache
   std::filesystem::path cache_dir;
   std::string cache_path_cvar = REXCVAR_GET(cache_path);
@@ -115,14 +125,16 @@ bool ReXApp::SetupEnvironment() {
     cache_dir = user_dir / "cache";
   }
 
-  PathConfig path_config{game_dir, user_dir, update_dir, cache_dir,
-                         exe_dir / (std::string(GetName()) + ".toml")};
+  PathConfig path_config{
+      game_dir,  user_dir, update_dir, cache_dir, exe_dir / (std::string(GetName()) + ".toml"),
+      devkit_dir};
   OnConfigurePaths(path_config);
   game_data_root_ = path_config.game_data_root;
   user_data_root_ = path_config.user_data_root;
   update_data_root_ = path_config.update_data_root;
   cache_root_ = path_config.cache_root;
   config_path_ = path_config.config_path;
+  devkit_data_root_ = path_config.devkit_data_root;  // HollywoodAkeem
   resolved_defaults_ = std::move(path_config);
 
   // Load config FIRST so log cvars have final values
@@ -180,6 +192,9 @@ bool ReXApp::SetupEnvironment() {
   if (!update_data_root_.empty()) {
     REXLOG_INFO("  Update data:    {}", update_data_root_.string());
   }
+  if (!devkit_data_root_.empty()) {
+    REXLOG_INFO("  Devkit data:    {}", devkit_data_root_.string());
+  }
   REXLOG_INFO("  Cache root:     {}", cache_root_.string());
 
   return true;
@@ -200,7 +215,8 @@ bool ReXApp::ConstructRuntime(const PathConfig& paths) {
   }
 
   runtime_ = std::make_unique<rex::Runtime>(paths.game_data_root, paths.user_data_root,
-                                            paths.update_data_root, paths.cache_root);
+                                            paths.update_data_root, paths.cache_root,
+                                            paths.devkit_data_root);  // HollywoodAkeem
   runtime_->set_app_context(&app_context());
 
   // Window and ImGui drawer already exist from SetupPresentation; publish them

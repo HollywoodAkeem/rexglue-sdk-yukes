@@ -289,6 +289,22 @@ u32 XamShowMessageBoxUI_entry(u32 user_index, mapped_wstring title_ptr, mapped_w
     buttons.push_back(rex::string::to_utf8(button));
   }
 
+  // HollywoodAkeem: log the message-box content so we can read it from the log
+  // even if the in-game font lacks the glyphs (Japanese/Yukes dev assertions
+  // commonly render as ????? in default ImGui fonts).
+  std::string text_dump;
+  if (text_ptr) {
+    text_dump = rex::string::to_utf8(text_ptr.value());
+  }
+  std::string buttons_joined;
+  for (size_t i = 0; i < buttons.size(); ++i) {
+    if (i)
+      buttons_joined += " | ";
+    buttons_joined += "[" + buttons[i] + "]";
+  }
+  REXKRNL_WARN("XamShowMessageBoxUI:\n  title: \"{}\"\n  text:  \"{}\"\n  buttons: {}", title,
+               text_dump, buttons_joined);
+
   X_RESULT result;
   if (REXCVAR_GET(headless)) {
     // Auto-pick the focused button.

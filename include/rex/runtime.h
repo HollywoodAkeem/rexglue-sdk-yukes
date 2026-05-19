@@ -94,7 +94,8 @@ class Runtime {
   explicit Runtime(const std::filesystem::path& game_data_root,
                    const std::filesystem::path& user_data_root = {},
                    const std::filesystem::path& update_data_root = {},
-                   const std::filesystem::path& cache_root = {});
+                   const std::filesystem::path& cache_root = {},
+                   const std::filesystem::path& devkit_data_root = {});
   ~Runtime();
 
   // Non-copyable
@@ -122,6 +123,7 @@ class Runtime {
   const std::filesystem::path& user_data_root() const { return user_data_root_; }
   const std::filesystem::path& update_data_root() const { return update_data_root_; }
   const std::filesystem::path& cache_root() const { return cache_root_; }
+  const std::filesystem::path& devkit_data_root() const { return devkit_data_root_; }
 
   // Set the app context for presentation (call before Setup)
   void set_app_context(ui::WindowedAppContext* context) { app_context_ = context; }
@@ -167,6 +169,7 @@ class Runtime {
   std::filesystem::path user_data_root_;
   std::filesystem::path update_data_root_;
   std::filesystem::path cache_root_;
+  std::filesystem::path devkit_data_root_;
 
   ui::WindowedAppContext* app_context_ = nullptr;
   ui::Window* display_window_ = nullptr;
@@ -202,16 +205,19 @@ namespace memory {
 //
 // HollywoodAkeem tweak: factored out from per-project copies in wwe13beta.
 inline bool IsValidGuestAddress(uint32_t guest_address) {
-  if (guest_address < 0x10000) return false;
+  if (guest_address < 0x10000)
+    return false;
   auto* rt = rex::Runtime::instance();
-  if (!rt || !rt->memory()) return false;
+  if (!rt || !rt->memory())
+    return false;
   auto* heap = rt->memory()->LookupHeap(guest_address);
-  if (!heap) return false;
+  if (!heap)
+    return false;
   rex::memory::HeapAllocationInfo info{};
-  if (!heap->QueryRegionInfo(guest_address, &info)) return false;
+  if (!heap->QueryRegionInfo(guest_address, &info))
+    return false;
   // Page must be committed AND have non-zero access protection.
-  return (info.state & rex::memory::kMemoryAllocationCommit) != 0
-         && info.protect != 0;
+  return (info.state & rex::memory::kMemoryAllocationCommit) != 0 && info.protect != 0;
 }
 
 }  // namespace memory

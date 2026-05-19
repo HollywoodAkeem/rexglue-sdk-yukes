@@ -204,6 +204,22 @@ void XmpApp::OnStateChanged() {
 
 X_HRESULT XmpApp::DispatchMessageSync(uint32_t message, uint32_t buffer_ptr,
                                       uint32_t buffer_length) {
+  // HollywoodAkeem: throttled per-message-per-thread log to identify which XMP
+  // message a worker thread is hot-polling. Logs first 3 + every 1000th call
+  // for each (message_id, thread) pair. Healthy use shows a couple of unique
+  // IDs each fired a few times; a stuck poller is the message ID that climbs
+  // into the thousands on the same thread.
+  {
+    thread_local std::unordered_map<uint32_t, uint32_t> tls_xmp_msg_count;
+    uint32_t& n = tls_xmp_msg_count[message];
+    ++n;
+    if (n <= 3 || (n % 1000) == 0) {
+      auto* th = XThread::GetCurrentThread();
+      REXKRNL_WARN("[XMP DISPATCH] msg=0x{:08X} buf={:08X} len={} #{} caller='{}' (h={:08X})",
+                   message, buffer_ptr, buffer_length, n, th ? th->name() : "<unknown>",
+                   th ? static_cast<uint32_t>(th->handle()) : 0u);
+    }
+  }
   // NOTE: buffer_length may be zero or valid.
   auto buffer = memory_->TranslateVirtual(buffer_ptr);
   switch (message) {
@@ -405,11 +421,25 @@ X_HRESULT XmpApp::DispatchMessageSync(uint32_t message, uint32_t buffer_ptr,
       assert_true(args->xmp_client == 0x00000002);
       REXKRNL_DEBUG("XMPGetPlaybackController({:08X}, {:08X}, {:08X})", uint32_t(args->xmp_client),
                     uint32_t(args->controller_ptr), uint32_t(args->locked_ptr));
-      memory::store_and_swap<uint32_t>(memory_->TranslateVirtual(args->controller_ptr), 0);
+      // (Initial-broadcast hypothesis ruled out: WWE 13 never registers an
+      // XNotifyListener, so kMsgPlaybackControllerChanged broadcasts have
+      // nowhere to deliver. The flag at *(0x83ACFD34)[0] must be flipped by
+      // direct memory write from some other path -- TBD.)
+      // HollywoodAkeem: return the actual current playback_client_ (set by
+      // XMPSetPlaybackController) instead of a hardcoded 0. WWE 13's init
+      // worker (sub_82395508) polls this in a tight loop waiting to observe
+      // the controller value it just set; with the old stub it always saw 0
+      // and spun forever, blocking the main thread's WaitForSingleObject on
+      // the init-complete event. Default constructor seeds playback_client_
+      // to kTitle (1), so titles that don't bother to SET before GET still
+      // see "title is the controller" and move on.
+      memory::store_and_swap<uint32_t>(memory_->TranslateVirtual(args->controller_ptr),
+                                       static_cast<uint32_t>(playback_client_));
       memory::store_and_swap<uint32_t>(memory_->TranslateVirtual(args->locked_ptr), 0);
 
       if (!XThread::GetCurrentThread()->main_thread()) {
         // Atrain spawns a thread 82437FD0 to call this in a tight loop forever.
+        // Kept as a CPU-cooler -- harmless even when the poll loop is short.
         rex::thread::Sleep(std::chrono::milliseconds(10));
       }
 
