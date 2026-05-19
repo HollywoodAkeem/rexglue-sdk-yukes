@@ -87,6 +87,16 @@ bool ReXApp::OnInitialize() {
 bool ReXApp::SetupEnvironment() {
   auto exe_dir = rex::filesystem::GetExecutableFolder();
 
+  // Load <exe-dir>/<project>.toml FIRST so path + log cvars all see their
+  // final values before we read them. Doing this after the REXCVAR_GET calls
+  // below would leave the path cvars at their compiled-in defaults (empty)
+  // and ConstructRuntime would bail with "--game_data_root was not provided"
+  // even when the toml sets it. config_path is computable from exe_dir alone,
+  // so we don't need PathConfig built yet to know where the toml lives.
+  auto early_config_path = exe_dir / (std::string(GetName()) + ".toml");
+  if (std::filesystem::exists(early_config_path))
+    rex::cvar::LoadConfig(early_config_path);
+
   std::filesystem::path game_dir;
   std::string game_data_cvar = REXCVAR_GET(game_data_root);
   if (!game_data_cvar.empty()) {
@@ -126,7 +136,7 @@ bool ReXApp::SetupEnvironment() {
   }
 
   PathConfig path_config{
-      game_dir,  user_dir, update_dir, cache_dir, exe_dir / (std::string(GetName()) + ".toml"),
+      game_dir,  user_dir, update_dir, cache_dir, early_config_path,
       devkit_dir};
   OnConfigurePaths(path_config);
   game_data_root_ = path_config.game_data_root;
@@ -137,8 +147,9 @@ bool ReXApp::SetupEnvironment() {
   devkit_data_root_ = path_config.devkit_data_root;  // HollywoodAkeem
   resolved_defaults_ = std::move(path_config);
 
-  // Load config FIRST so log cvars have final values
-  if (std::filesystem::exists(config_path_))
+  // If OnConfigurePaths redirected config_path_ to a different file, reload
+  // from that location so subscriber-supplied overrides take effect.
+  if (config_path_ != early_config_path && std::filesystem::exists(config_path_))
     rex::cvar::LoadConfig(config_path_);
 
   // Late-phase logging
