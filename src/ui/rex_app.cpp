@@ -97,10 +97,21 @@ bool ReXApp::SetupEnvironment() {
   if (std::filesystem::exists(early_config_path))
     rex::cvar::LoadConfig(early_config_path);
 
+  // Game data: cvar override (e.g. when developer wants assets out of tree),
+  // otherwise default to <exe-dir>/assets. This mirrors how a released build
+  // is shipped: drop the exe in any folder, put an `assets/` directory next
+  // to it containing default.xex + the game data, and it just works without
+  // any toml configuration. The cvar override is for dev trees that want
+  // assets stored elsewhere or shared between projects.
   std::filesystem::path game_dir;
   std::string game_data_cvar = REXCVAR_GET(game_data_root);
   if (!game_data_cvar.empty()) {
     game_dir = game_data_cvar;
+  } else {
+    auto default_assets = exe_dir / "assets";
+    if (std::filesystem::is_directory(default_assets)) {
+      game_dir = default_assets;
+    }
   }
 
   // User data: cvar override, or platform user directory
