@@ -149,18 +149,56 @@ u32 NtQueryInformationFile_entry(u32 file_handle, ppc_ptr_t<X_IO_STATUS_BLOCK> i
       break;
     }
     case XFileXctdCompressionInformation: {
-      // HollywoodAkeem note (2026-05-11): tried returning SUCCESS with
-      // unknown=0 ("not compressed") to fix wwe2k14 match-loading hang —
-      // BACKFIRED: broke startup entirely (lied about compression on PAC
-      // files that ARE compressed → game read garbage). Reverted to
-      // INVALID_PARAMETER which at least lets the game start. Real fix
-      // needs us to read the file's first 4 bytes and check for the XCTD
-      // magic 0x0FF512ED. Until then, match-loading hang remains open.
-      REXKRNL_DEBUG(
-          "NtQueryInformationFile(XFileXctdCompressionInformation) "
-          "returning INVALID_PARAMETER (real impl needs file magic check)");
-      status = X_STATUS_INVALID_PARAMETER;
-      out_length = 0;
+      // HollywoodAkeem (2026-05-18): real impl. The 2026-05-11 attempt of
+      // returning SUCCESS with unknown=0 unconditionally broke startup
+      // because it lied about compression on PAC files that ARE XCTD-
+      // compressed. The right move is to actually peek at the file:
+      // XCTD-compressed Xbox 360 files start with the 4-byte big-endian
+      // magic 0x0FF512ED. Read those, classify the file, and report
+      // honestly.
+      //
+      // - non-compressed (no magic): unknown=0 — matches the historical
+      //   "no compression info, treat as plain" answer
+      // - XCTD-compressed (magic matches): unknown=1 — signals "yes
+      //   compressed, use your XCTD decompression path"
+      //
+      // The exact non-zero value the Xbox SDK expects is undocumented but
+      // the only thing 2K14's PAC-loader appears to check is zero vs
+      // non-zero (judging from the 2026-05-11 failure pattern). If a
+      // future title needs more (chunk size, etc.) we can extend.
+      auto info = info_ptr.as<X_FILE_XCTD_COMPRESSION_INFORMATION*>();
+      uint8_t magic_bytes[4] = {};
+      size_t bytes_read = 0;
+      X_STATUS read_status = X_STATUS_UNSUCCESSFUL;
+      if (file->file()) {
+        read_status = file->file()->ReadSync(
+            std::span<uint8_t>(magic_bytes, sizeof(magic_bytes)),
+            /*byte_offset=*/0, &bytes_read);
+      }
+      if (read_status == X_STATUS_SUCCESS && bytes_read == sizeof(magic_bytes)) {
+        // Magic is big-endian on disk (Xbox 360 native byte order).
+        uint32_t magic = (static_cast<uint32_t>(magic_bytes[0]) << 24) |
+                         (static_cast<uint32_t>(magic_bytes[1]) << 16) |
+                         (static_cast<uint32_t>(magic_bytes[2]) << 8)  |
+                          static_cast<uint32_t>(magic_bytes[3]);
+        info->unknown = (magic == 0x0FF512EDu) ? 1u : 0u;
+        REXKRNL_DEBUG(
+            "NtQueryInformationFile(XFileXctdCompressionInformation): "
+            "{} (magic=0x{:08X}) for '{}'",
+            info->unknown ? "XCTD-compressed" : "not compressed",
+            magic, file->path());
+      } else {
+        // Couldn't peek the file (zero-byte file, IO error, no underlying
+        // rex::filesystem::File). Fall back to "not compressed" — safer
+        // than failing with INVALID_PARAMETER which crashed match-load.
+        info->unknown = 0;
+        REXKRNL_DEBUG(
+            "NtQueryInformationFile(XFileXctdCompressionInformation): "
+            "magic read failed (status=0x{:08X}, bytes_read={}) — assuming "
+            "not compressed for '{}'",
+            static_cast<uint32_t>(read_status), bytes_read, file->path());
+      }
+      out_length = sizeof(*info);
       break;
     };
     case XFileNetworkOpenInformation: {
