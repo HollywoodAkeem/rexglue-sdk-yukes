@@ -34,7 +34,11 @@ FunctionDispatcher* GetBoundFunctionDispatcher() {
 
 }  // namespace
 
-static void InvalidFunctionTrap(PPCContext& ctx, uint8_t* /*base*/) {
+// Kept for future strict-mode use (e.g. a "fail-fast" cvar that opts out of
+// HollywoodAkeem's soft-fallback). Currently no callers — ResolveIndirectFunction
+// returns nullptr instead, letting the generated indirect-call macro decide
+// whether to log+continue or invoke this trap directly.
+[[maybe_unused]] static void InvalidFunctionTrap(PPCContext& ctx, uint8_t* /*base*/) {
   REX_FATAL("Call to invalid or unregistered function at guest address 0x{:08X}",
             ctx.last_indirect_target);
 }
@@ -42,14 +46,17 @@ static void InvalidFunctionTrap(PPCContext& ctx, uint8_t* /*base*/) {
 PPCFunc* ResolveIndirectFunction(uint32_t guest_address) {
   FunctionDispatcher* dispatcher = GetBoundFunctionDispatcher();
   if (!dispatcher) {
-    return &InvalidFunctionTrap;
-  }
+    return nullptr;  // HollywoodAkeem: was &InvalidFunctionTrap — return nullptr
+  }                  // so _indirect_call.inja's soft-fallback (log to
+                     // missing_funcs.log + r3=0) fires instead of hard-crashing
+                     // on REX_FATAL. Callers that want the strict behavior can
+                     // explicitly invoke InvalidFunctionTrap when they see null.
 
   if (PPCFunc* func = dispatcher->GetFunction(guest_address)) {
     return func;
   }
 
-  return &InvalidFunctionTrap;
+  return nullptr;  // HollywoodAkeem: as above
 }
 
 FunctionDispatcher::FunctionDispatcher(rex::memory::Memory* memory, ExportResolver* export_resolver)
