@@ -35,6 +35,9 @@ REXCVAR_DECLARE(std::string, game_data_root);
 REXCVAR_DECLARE(std::string, user_data_root);
 REXCVAR_DECLARE(std::string, update_data_root);
 REXCVAR_DECLARE(std::string, cache_path);
+// HollywoodAkeem: devkit_data_root cvar declared next to its peers so
+// rex_app.cpp can REXCVAR_GET it without a missing-symbol link error.
+REXCVAR_DECLARE(std::string, devkit_data_root);
 
 namespace rex {
 
