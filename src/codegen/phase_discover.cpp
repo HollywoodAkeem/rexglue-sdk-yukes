@@ -121,6 +121,65 @@ void discoverFunction(CodegenContext& ctx, uint32_t funcAddr,
     }
   }
 
+  // HollywoodAkeem: register tail-call targets AND wire up their callsite
+  // edges. Upstream skipped this on the assumption that tail-call targets are
+  // also reachable via a regular `bl` elsewhere — but the Xbox 360 Yukes-
+  // engine pattern of alternate-entry chunks tail-calling to other alternate
+  // entries breaks that assumption.
+  //
+  // Two-part fix: (1) addFunction so the target gets a FunctionNode + body;
+  // (2) addUnresolvedJumpToFunction so the merge phase wires up the
+  // callsite→callee edge. Without (2), codegen sees the b instruction, looks
+  // up the FunctionNode's calls/tailCalls for the site, finds nothing, and
+  // emits REX_FATAL("Unresolved call from X to Y").
+  //
+  // We don't know the per-site address for each tail-call target from
+  // result.tailCalls alone (the BlockDiscoveryResult collapses them to a flat
+  // vector of unique targets), so we mine result.unresolvedBranches for any
+  // non-call branch whose target matches a tailCalls entry and add it there.
+  // Anything not matched falls back to just the addFunction (target gets
+  // recompiled, but the specific callsite may still need manual review).
+  //
+  // Gated by the same cvar as the data-pointer scan so projects without that
+  // pattern keep upstream behavior.
+  if (REXCVAR_GET(data_pointer_scan)) {
+    std::unordered_set<uint32_t> tail_targets(result.tailCalls.begin(), result.tailCalls.end());
+    for (uint32_t target : result.tailCalls) {
+      if (!graph.isEntryPoint(target) && !graph.isImport(target)) {
+        if (binary.isInImportExportRange(target)) {
+          continue;
+        }
+        graph.addFunction(target, 4, FunctionAuthority::DISCOVERED, true);
+      }
+    }
+    // For each branch the discovery walked but classified as "external"
+    // (tail-call), also queue an unresolvedJump so the merge phase will
+    // record the callsite edge once the target function is registered.
+    // The walker records these in result.tailCalls but doesn't attach a
+    // site, so we scan the function's blocks for `b` instructions whose
+    // target is in our tail_targets set.
+    for (const auto& block : result.blocks) {
+      // Walk the block's instructions to find tail-call branches.
+      for (uint32_t addr = block.base; addr + 4 <= block.base + block.size; addr += 4) {
+        const uint8_t* insn_bytes = binary.translate(addr);
+        if (!insn_bytes) continue;
+        uint32_t insn = rex::memory::load_and_swap<uint32_t>(insn_bytes);
+        // Unconditional b (op=18), no link bit, PC-relative
+        if ((insn >> 26) != 18) continue;
+        if (insn & 1) continue;  // link bit set = bl (call, handled by externalCalls)
+        bool absolute = (insn >> 1) & 1;
+        int32_t li = static_cast<int32_t>(insn & 0x03FFFFFC);
+        if (li & 0x02000000) li -= 0x04000000;
+        uint32_t target = absolute ? static_cast<uint32_t>(li) : addr + li;
+        if (!tail_targets.count(target)) continue;
+        // Queue as unresolved jump (isCall=false, isConditional=false). The
+        // merge phase's tryResolveAgainst will call addTailCall once the
+        // target FunctionNode is created and registered.
+        graph.addUnresolvedJumpToFunction(funcAddr, addr, target, false, false);
+      }
+    }
+  }
+
   // Add unresolved branches for later resolution
   for (const auto& branch : result.unresolvedBranches) {
     graph.addUnresolvedJumpToFunction(funcAddr, branch.site, branch.target, branch.isCall,
@@ -264,6 +323,178 @@ void discoverAllFunctions(CodegenContext& ctx) {
   }
 
   REXCODEGEN_TRACE("Analyze: {} total functions after vtable scan", graph.functionCount());
+
+  //=============================================================================
+  // HollywoodAkeem: Data-Section Code Pointer Scan
+  //
+  // Scan .rdata and .data for 32-bit big-endian values that point to code
+  // addresses with a recognizable PowerPC function prologue (mflr r12 / mflr r0).
+  // Catches functions reachable only via data-resident pointer tables — the
+  // Xbox 360 Yukes engine (WWE 2K14, SVR07/08) and similar games heavily use
+  // these, and the existing vtableScanner only finds MSVC RTTI-style vtables
+  // which Xbox 360 binaries usually don't have.
+  //
+  // Conservative filter: target must START WITH mflr r12 or mflr r0 (a real
+  // function prologue). Addresses that point INTO existing function bodies
+  // (alternate entry points used by some compiler optimizations) are logged
+  // for manual `[entrypoint.functions]` review but NOT auto-registered — they
+  // require chunk handling that this simple scan can't do safely.
+  //=============================================================================
+  if (REXCVAR_GET(data_pointer_scan)) {
+    REXCODEGEN_TRACE("Analyze: starting data-section code-pointer scan...");
+    constexpr uint32_t MFLR_R12 = 0x7D8802A6u;
+    constexpr uint32_t MFLR_R0  = 0x7C0802A6u;
+
+    // Terminator opcodes that end a function's reachable range.
+    constexpr uint32_t BLR  = 0x4E800020u;
+    constexpr uint32_t BCTR = 0x4E800420u;
+    // Max bytes to walk forward from a candidate looking for a terminator.
+    constexpr uint32_t MAX_CHUNK_SCAN = 0x1000u;  // 4 KB
+
+    size_t scanned_pointers = 0;
+    size_t registered_prologue = 0;
+    size_t registered_safe_alt = 0;
+    size_t skipped_unsafe = 0;
+    // Dedupe across the scan — many tables reference the same address repeatedly.
+    std::unordered_set<uint32_t> seen_candidates;
+
+    for (const auto& sec : binary.sections()) {
+      // Only scan non-executable data sections (.rdata, .data, etc.). Skip
+      // executable sections (we already discover those by control flow) and
+      // sections with no backing data.
+      if (sec.executable || !sec.data || sec.size < 4) {
+        continue;
+      }
+      // .pdata is exception-handler RVAs, not function pointers — skip it.
+      if (sec.name == ".pdata") {
+        continue;
+      }
+
+      for (uint32_t offset = 0; offset + 4 <= sec.size; offset += 4) {
+        // Big-endian 32-bit load (matches PowerPC byte order in the binary)
+        uint32_t candidate = rex::memory::load_and_swap<uint32_t>(sec.data + offset);
+        scanned_pointers++;
+
+        // Quick rejects
+        if (candidate == 0) continue;
+        if (candidate & 0x3) continue;                              // PPC is 4-byte aligned
+        if (!binary.isExecutable(candidate)) continue;              // must point at code
+        if (binary.isInImportExportRange(candidate)) continue;     // skip import thunks
+        if (graph.isEntryPoint(candidate)) continue;                // already registered
+        if (!seen_candidates.insert(candidate).second) continue;   // already evaluated
+
+        const uint8_t* target_bytes = binary.translate(candidate);
+        if (!target_bytes) continue;
+        uint32_t first_insn = rex::memory::load_and_swap<uint32_t>(target_bytes);
+
+        // Case 1: HIGH CONFIDENCE — real function prologue. Register and move on.
+        if (first_insn == MFLR_R12 || first_insn == MFLR_R0) {
+          graph.addFunction(candidate, 4, FunctionAuthority::VTABLE, true);
+          registered_prologue++;
+          REXCODEGEN_TRACE("data_pointer_scan: 0x{:08X} (prologue) via pointer at 0x{:08X}+{}",
+                           candidate, sec.baseAddress, offset);
+          continue;
+        }
+
+        // Case 2: non-prologue target. Walk forward looking for a terminator
+        // (blr / bctr / unconditional b). While walking, check for backward
+        // branches that escape [candidate, terminator). If any escape, this
+        // is a loop-body / alternate-entry pattern that the recompiler's
+        // chunk model can't represent safely — log and skip.
+        uint32_t walk_addr = candidate;
+        uint32_t terminator_addr = 0;
+        bool has_escape_branch = false;
+        uint32_t max_walk_addr = candidate + MAX_CHUNK_SCAN;
+        while (walk_addr < max_walk_addr) {
+          const uint8_t* walk_bytes = binary.translate(walk_addr);
+          if (!walk_bytes) break;                                   // crossed section boundary
+          uint32_t insn = rex::memory::load_and_swap<uint32_t>(walk_bytes);
+          uint32_t op = insn >> 26;
+
+          // Conditional branch (bc family): 16-bit signed displacement at bits 16..31, mask 0xFFFC
+          if (op == 16) {
+            int32_t bd = static_cast<int32_t>(insn & 0xFFFC);
+            if (bd & 0x8000) bd -= 0x10000;
+            uint32_t target = walk_addr + bd;
+            if (target < candidate) {                               // backward escape
+              has_escape_branch = true;
+              break;
+            }
+          }
+          // Unconditional branch (b family): 26-bit signed displacement at bits 6..31, mask 0x03FFFFFC
+          else if (op == 18) {
+            int32_t li = static_cast<int32_t>(insn & 0x03FFFFFC);
+            if (li & 0x02000000) li -= 0x04000000;
+            bool absolute = (insn >> 1) & 1;
+            bool link = insn & 1;
+            uint32_t target = absolute ? static_cast<uint32_t>(li) : walk_addr + li;
+            if (!link) {
+              // Non-link branch = tail-call or escape. Becomes the terminator.
+              if (target < candidate || target >= max_walk_addr) {
+                // Targets outside our walk range are fine as tail-calls.
+              }
+              terminator_addr = walk_addr;
+              break;
+            }
+            // Link branch (bl) = call. Backward call is fine (calls another func), no escape.
+          }
+          // Plain blr / bctr — clean terminator.
+          else if (insn == BLR || insn == BCTR) {
+            terminator_addr = walk_addr;
+            break;
+          }
+          walk_addr += 4;
+        }
+
+        if (has_escape_branch || terminator_addr == 0) {
+          // Unsafe to register: chunk has a backward branch into untracked
+          // code, OR we never found a terminator within the scan window.
+          // The user can still add a manual [entrypoint.functions] entry
+          // after deciding what to do.
+          skipped_unsafe++;
+          REXCODEGEN_TRACE("data_pointer_scan: 0x{:08X} skipped (insn=0x{:08X}, "
+                           "{}backward-escape) via pointer at 0x{:08X}+{}",
+                           candidate, first_insn,
+                           has_escape_branch ? "has " : "no terminator, ",
+                           sec.baseAddress, offset);
+          continue;
+        }
+
+        // Case 3: SAFE alternate entry — self-contained chunk with no
+        // backward escape. Register as standalone function; the generated
+        // code will be a partial body that runs from candidate to terminator,
+        // using whatever register state the caller set up.
+        graph.addFunction(candidate, 4, FunctionAuthority::VTABLE, true);
+        registered_safe_alt++;
+        REXCODEGEN_TRACE("data_pointer_scan: 0x{:08X} (safe alt-entry, end~0x{:08X}) via "
+                         "pointer at 0x{:08X}+{}",
+                         candidate, terminator_addr + 4, sec.baseAddress, offset);
+      }
+    }
+
+    REXCODEGEN_DEBUG("data_pointer_scan: scanned {} 32-bit words, registered {} "
+                     "(prologue) + {} (safe alt-entry) functions, skipped {} unsafe",
+                     scanned_pointers, registered_prologue, registered_safe_alt,
+                     skipped_unsafe);
+
+    size_t registered = registered_prologue + registered_safe_alt;
+
+    // Re-run discovery for the newly registered functions so we get their
+    // control flow (which may reveal more transitively-reachable functions).
+    if (registered > 0) {
+      size_t dpsIteration = 0;
+      const size_t maxDpsIterations = REXCVAR_GET(max_vtable_iterations);
+      while (dpsIteration < maxDpsIterations) {
+        dpsIteration++;
+        auto knownFunctions = buildKnownFunctions(graph);
+        if (discoverPendingFunctions(ctx, knownFunctions) == 0) break;
+        if (graph.functionCount() == lastFunctionCount) break;
+        lastFunctionCount = graph.functionCount();
+      }
+      REXCODEGEN_TRACE("Analyze: {} total functions after data-pointer scan",
+                       graph.functionCount());
+    }
+  }
 }
 
 //=============================================================================

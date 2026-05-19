@@ -33,3 +33,4 @@ REXCVAR_DECLARE(uint32_t, max_seh_scope_entries);
 REXCVAR_DECLARE(uint32_t, backward_scan_limit);
 REXCVAR_DECLARE(uint32_t, max_jump_table_entries);
 REXCVAR_DECLARE(uint32_t, max_blocks_per_function);
+REXCVAR_DECLARE(bool, data_pointer_scan);  // HollywoodAkeem: .rdata/.data code-pointer discovery

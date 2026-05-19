@@ -85,4 +85,16 @@ REXCVAR_DEFINE_UINT32(max_blocks_per_function, 10000, "Codegen",
     .lifecycle(rex::cvar::Lifecycle::kInitOnly)
     .range(1, 1000000);
 
+// HollywoodAkeem: scan .rdata/.data sections for 32-bit values that point
+// to function prologues (mflr r12 / mflr r0) and register them as
+// functions. Catches functions that are only reachable via indirect call
+// through data-resident pointer tables (vtables, function-pointer arrays,
+// etc.) — the Xbox 360 Yukes engine (WWE 2K14, SVR07/08) uses these
+// heavily and rexglue's existing vtableScanner only catches MSVC RTTI
+// vtables which Xbox 360 binaries usually don't have. Disabled by default
+// to avoid changing behavior for projects that don't need it.
+REXCVAR_DEFINE_BOOL(data_pointer_scan, false, "Codegen",
+                    "Scan .rdata/.data for code pointers (vtables, fn ptr arrays)")
+    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
+
 // clang-format on

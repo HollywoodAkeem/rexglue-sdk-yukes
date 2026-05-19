@@ -83,9 +83,16 @@ bool build_bl(BuilderContext& ctx) {
       break;
 
     case TargetKind::Unknown:
-      REXCODEGEN_ERROR("Unresolved bl target 0x{:08X} from 0x{:08X}", target, ctx.base);
-      ctx.println("\t// ERROR: unresolved bl target 0x{:08X}", target);
-      ctx.println("\tREX_FATAL(\"Unresolved call from 0x{:08X} to 0x{:08X}\");", ctx.base, target);
+      // HollywoodAkeem: fall back to runtime dispatch instead of REX_FATAL.
+      // The indirect-call macro checks the per-module table, the global
+      // FunctionDispatcher, and finally the missing-function soft-fallback
+      // logger — recovers from any direct-call target the static analysis
+      // missed (including alternate-entry chunks registered post-hoc by
+      // data_pointer_scan whose callsite edges weren't wired up).
+      REXCODEGEN_ERROR("Unresolved bl target 0x{:08X} from 0x{:08X} — using runtime dispatch",
+                       target, ctx.base);
+      ctx.println("\t// unresolved bl at codegen: 0x{:08X} (runtime dispatch)", target);
+      ctx.println("\tREX_CALL_INDIRECT_FUNC(0x{:08X}u);", target);
       break;
   }
   return true;

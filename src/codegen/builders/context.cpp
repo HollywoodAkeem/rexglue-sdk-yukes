@@ -234,18 +234,25 @@ void BuilderContext::emit_function_call(uint32_t address) {
       return;
     }
 
-    // Unresolved target from graph
-    REXCODEGEN_ERROR("Unresolved function 0x{:08X} from 0x{:08X}", address, base);
-    println("\t// FATAL: unresolved function 0x{:08X}", address);
-    println("\tREX_FATAL(\"Unresolved call from 0x{:08X} to 0x{:08X}\");", base, address);
+    // Unresolved target from graph — HollywoodAkeem: dispatch indirectly at
+    // runtime instead of REX_FATAL'ing the build out. The indirect-call macro
+    // looks up the address in the per-module table, then falls back to the
+    // global FunctionDispatcher, then (if still unresolved) to the missing-
+    // function soft-fallback logger. This recovers from any direct-call
+    // target the static analysis missed, including alternate-entry chunks
+    // registered by data_pointer_scan whose callsite edges weren't wired up.
+    REXCODEGEN_ERROR("Unresolved function 0x{:08X} from 0x{:08X} — using runtime dispatch",
+                     address, base);
+    println("\t// unresolved at codegen: 0x{:08X} (fall back to runtime dispatch)", address);
+    println("\tREX_CALL_INDIRECT_FUNC(0x{:08X}u);", address);
     return;
   }
 
-  // No pre-resolved target found - this is an error
-  REXCODEGEN_ERROR("Unresolved function 0x{:08X} from 0x{:08X} (no CallTarget in FunctionNode)",
-                   address, base);
-  println("\t// FATAL: unresolved function 0x{:08X} (no CallTarget in FunctionNode)", address);
-  println("\tREX_FATAL(\"Unresolved call from 0x{:08X} to 0x{:08X}\");", base, address);
+  // No pre-resolved target found — HollywoodAkeem: same fallback as above.
+  REXCODEGEN_ERROR("Unresolved function 0x{:08X} from 0x{:08X} (no CallTarget) — "
+                   "using runtime dispatch", address, base);
+  println("\t// unresolved at codegen (no CallTarget): 0x{:08X}", address);
+  println("\tREX_CALL_INDIRECT_FUNC(0x{:08X}u);", address);
 }
 
 void BuilderContext::emit_conditional_branch(bool not_, std::string_view cond) {
@@ -283,18 +290,22 @@ void BuilderContext::emit_conditional_branch(bool not_, std::string_view cond) {
           println("\t}}");
         }
       } else {
-        REXCODEGEN_ERROR("Unresolved conditional branch to 0x{:08X} from 0x{:08X} (no CallTarget)",
-                         target, base);
-        println("\tif ({}{}.{}) REX_FATAL(\"Unresolved branch from 0x{:08X} to 0x{:08X}\");",
-                not_ ? "!" : "", cr(insn.operands[0]), cond, base, target);
+        // HollywoodAkeem: same runtime-dispatch fallback as unconditional case.
+        // Conditional branch to unresolved external target = conditional tail-call.
+        REXCODEGEN_ERROR("Unresolved conditional branch to 0x{:08X} from 0x{:08X} (no CallTarget)"
+                         " — using runtime dispatch", target, base);
+        println("\tif ({}{}.{}) {{ REX_CALL_INDIRECT_FUNC(0x{:08X}u); return; }}",
+                not_ ? "!" : "", cr(insn.operands[0]), cond, target);
       }
       break;
 
     case TargetKind::Unknown:
-      REXCODEGEN_ERROR("Unresolved conditional branch to 0x{:08X} from 0x{:08X}", target, base);
-      println("\t// ERROR: conditional branch to unknown address 0x{:08X}", target);
-      println("\tif ({}{}.{}) REX_FATAL(\"Unresolved branch from 0x{:08X} to 0x{:08X}\");",
-              not_ ? "!" : "", cr(insn.operands[0]), cond, base, target);
+      // HollywoodAkeem: same runtime-dispatch fallback as unconditional case.
+      REXCODEGEN_ERROR("Unresolved conditional branch to 0x{:08X} from 0x{:08X} — "
+                       "using runtime dispatch", target, base);
+      println("\t// unresolved cond branch at codegen: 0x{:08X} (runtime dispatch)", target);
+      println("\tif ({}{}.{}) {{ REX_CALL_INDIRECT_FUNC(0x{:08X}u); return; }}",
+              not_ ? "!" : "", cr(insn.operands[0]), cond, target);
       break;
   }
 }
