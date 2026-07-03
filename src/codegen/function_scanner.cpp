@@ -1813,7 +1813,8 @@ std::optional<JumpTable> detectJumpTable(DecodedBinary& decoded, uint32_t bctrAd
 BlockDiscoveryResult discoverBlocks(DecodedBinary& decoded, uint32_t entryPoint,
                                     const CodeRegion& containingRegion,
                                     const std::unordered_set<uint32_t>& knownFunctions,
-                                    uint32_t pdataSize) {
+                                    uint32_t pdataSize,
+                                    const std::unordered_map<uint32_t, JumpTable>* manualSwitchTables) {
   BlockDiscoveryResult result;
   std::unordered_set<uint32_t> visited;
   std::unordered_set<uint32_t> blockStarts;
@@ -1902,7 +1903,28 @@ BlockDiscoveryResult discoverBlocks(DecodedBinary& decoded, uint32_t entryPoint,
           // bctr - try to detect jump table
           REXCODEGEN_TRACE("discoverBlocks: bctr at 0x{:08X} in func 0x{:08X}, funcEnd=0x{:08X}",
                            addr, entryPoint, funcEnd);
-          auto jt = detectJumpTable(decoded, addr, containingRegion, entryPoint, funcEnd);
+          // HollywoodAkeem fix: consult manually-configured [[switch_tables]]
+          // FIRST. Previously manual tables only reached the emit phase, so
+          // the switch statement gained the configured cases but their target
+          // blocks were never discovered — producing "use of undeclared label
+          // loc_XXXXXXXX" compile errors (the exact failure that blocked the
+          // 0.7.6-era attempts at overriding truncated tables).
+          std::optional<JumpTable> jt;
+          if (manualSwitchTables) {
+            auto mIt = manualSwitchTables->find(addr);
+            if (mIt != manualSwitchTables->end()) {
+              jt = mIt->second;
+              jt->bctrAddress = addr;
+              if (jt->tableAddress == 0) {
+                jt->tableAddress = addr + 4;  // inline-table convention
+              }
+              REXCODEGEN_TRACE("discoverBlocks: using MANUAL switch table at bctr 0x{:08X} "
+                               "with {} targets", addr, jt->targets.size());
+            }
+          }
+          if (!jt) {
+            jt = detectJumpTable(decoded, addr, containingRegion, entryPoint, funcEnd);
+          }
           if (jt) {
             REXCODEGEN_TRACE("discoverBlocks: detected jump table at bctr 0x{:08X} with {} targets",
                              addr, jt->targets.size());

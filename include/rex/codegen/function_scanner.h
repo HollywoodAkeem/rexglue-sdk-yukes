@@ -251,12 +251,20 @@ struct BlockDiscoveryResult {
  * @param entryPoint Starting address of the function
  * @param containingRegion Code region containing the entry point
  * @param knownFunctions Set of known function entry points (to detect tail calls)
+ * @param pdataSize Optional size from .pdata (0 if unknown)
+ * @param manualSwitchTables Optional map of bctr address -> manually-configured
+ *        JumpTable ([[switch_tables]] from config). Consulted BEFORE
+ *        auto-detection so configured targets become discovered blocks/labels
+ *        of the containing function. (HollywoodAkeem fix — without this,
+ *        manual tables only reached the emit phase and produced gotos to
+ *        undeclared labels.)
  * @return BlockDiscoveryResult containing blocks, branches, and jump tables
  */
 BlockDiscoveryResult discoverBlocks(DecodedBinary& decoded, uint32_t entryPoint,
                                     const CodeRegion& containingRegion,
                                     const std::unordered_set<uint32_t>& knownFunctions,
-                                    uint32_t pdataSize = 0);
+                                    uint32_t pdataSize = 0,
+                                    const std::unordered_map<uint32_t, JumpTable>* manualSwitchTables = nullptr);
 
 //=============================================================================
 // Jump Table Detection
