@@ -19,6 +19,9 @@
 #include <rex/system/xfile.h>
 #include <rex/thread/mutex.h>
 
+#include <map>
+#include <mutex>
+
 #include <span>
 
 namespace rex::system {
@@ -115,6 +118,35 @@ X_STATUS XFile::ReadInternal(uint32_t buffer_guest_address, uint32_t buffer_leng
   if (byte_offset == uint64_t(-1)) {
     // Read from current position.
     byte_offset = position_;
+  }
+
+  // HollywoodAkeem music instrumentation (2026-07-06): per-file read tracing
+  // for Wwise sound banks. During the WWE 2K14 music-silence investigation we
+  // needed to know whether the AK::IOThread stream pump ever actually reads
+  // from Game_Sound_M.pck (818 MB streamed-music bank) — the fs category has
+  // no per-read logging. First 10 reads per .pck log individually, then
+  // every 200th per file.
+  {
+    const std::string& p = path();
+    if (p.size() >= 4) {
+      char c1 = p[p.size() - 3], c2 = p[p.size() - 2], c3 = p[p.size() - 1];
+      bool is_pck = (p[p.size() - 4] == '.') && (c1 == 'p' || c1 == 'P') &&
+                    (c2 == 'c' || c2 == 'C') && (c3 == 'k' || c3 == 'K');
+      if (is_pck) {
+        static std::mutex pck_stat_mutex;
+        static std::map<std::string, uint64_t> pck_read_counts;
+        uint64_t n;
+        {
+          std::lock_guard<std::mutex> stat_lock(pck_stat_mutex);
+          n = ++pck_read_counts[p];
+        }
+        // Unthrottled as of round 2: even sustained music streaming is only
+        // ~6 reads/s (32 KB chunks), and the throttle hid whether previews
+        // read 1 chunk or 199.
+        REXSYS_INFO("[PCK READ] '{}' #{} off=0x{:X} len=0x{:X}", p, n, byte_offset,
+                    buffer_length);
+      }
+    }
   }
 
   size_t bytes_read = 0;

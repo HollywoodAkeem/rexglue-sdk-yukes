@@ -22,6 +22,18 @@
 #include <rex/system/thread_state.h>
 #include <rex/system/xthread.h>
 
+#include <atomic>
+#include <chrono>
+
+// HollywoodAkeem (2026-07-06): hardware-accurate XMA context self-scanning.
+// See WorkerThreadMain for the full story (WWE 2K14 music fix). Off by
+// default — titles that kick normally keep the exact upstream behavior.
+REXCVAR_DEFINE_BOOL(xma_poll_contexts, false, "APU",
+                    "Continuously scan allocated XMA contexts and decode any with valid input "
+                    "buffers, like real hardware. Needed by titles that drive XMA contexts by "
+                    "direct memory writes without ever touching the kick registers (e.g. "
+                    "WWE 2K14's Wwise music streams).");
+
 extern "C" {
 #include "libavutil/log.h"
 }  // extern "C"
@@ -138,7 +150,48 @@ X_STATUS XmaDecoder::Setup(system::KernelState* kernel_state) {
 }
 
 void XmaDecoder::WorkerThreadMain() {
+  const bool poll_contexts = REXCVAR_GET(xma_poll_contexts);
   while (worker_running_) {
+    // HollywoodAkeem (2026-07-06, WWE 2K14 music fix): hardware-accurate
+    // context self-scanning. Real XMA silicon continuously scans the context
+    // array and decodes any context whose input-buffer-valid bits are set —
+    // the kick register is a "process now" hint, not a requirement. WWE 2K14
+    // (and likely other late-era Wwise titles) allocates contexts via
+    // XMACreateContext, then manipulates the context structs directly in
+    // memory under the 0x0601 hardware lock and NEVER writes a kick register
+    // (verified: no kick-writing code exists anywhere in the binary). Under
+    // the kick-only model such titles deadlock: title waits for output that
+    // the decoder will never produce. When xma_poll_contexts is set, scan
+    // allocated-but-not-enabled contexts and enable any with valid input.
+    if (poll_contexts) {
+      for (uint32_t n = 0; n < kContextCount; n++) {
+        XmaContext& context = contexts_[n];
+        // Do NOT filter on is_allocated(): that flag only tracks kernel-API
+        // allocations (XMACreateContext), but WWE 2K14 claims contexts
+        // directly in the shared array via the hardware lock/
+        // CurrentContextIndex arbitration protocol — bypassing the kernel
+        // entirely. Real hardware scans every slot; so do we.
+        if (context.is_enabled()) {
+          continue;
+        }
+        const uint8_t* host_ptr = memory()->TranslateVirtual(context.guest_ptr());
+        if (!host_ptr) {
+          continue;
+        }
+        XMA_CONTEXT_DATA data(host_ptr);
+        if (data.IsAnyInputBufferValid()) {
+          static std::atomic<uint32_t> autokick_count{0};
+          uint32_t k = autokick_count.fetch_add(1, std::memory_order_relaxed) + 1;
+          if (k <= 20 || k % 500 == 0) {
+            REXAPU_INFO("[XMA AUTOKICK] #{} ctx={} in0_valid={} in1_valid={} out_valid={}", k, n,
+                        uint32_t(data.input_buffer_0_valid), uint32_t(data.input_buffer_1_valid),
+                        uint32_t(data.output_buffer_valid));
+          }
+          context.Enable();
+        }
+      }
+    }
+
     // Okay, let's loop through XMA contexts to find ones we need to decode!
     bool did_work = false;
     for (uint32_t n = 0; n < kContextCount && worker_running_; n++) {
@@ -157,6 +210,14 @@ void XmaDecoder::WorkerThreadMain() {
     }
 
     if (did_work) {
+      continue;
+    }
+    if (poll_contexts) {
+      // Self-scanning mode: never block indefinitely — the title feeds
+      // contexts by direct memory writes with no signal we can observe
+      // (the 0x0601 lock traffic is the only tell). 5 ms poll keeps decode
+      // latency far below the title's own output-polling cadence.
+      rex::thread::Wait(work_event_.get(), false, std::chrono::milliseconds(5));
       continue;
     }
     // No work done this iteration, block until signaled.
@@ -256,6 +317,20 @@ uint32_t XmaDecoder::ReadRegister(uint32_t addr) {
       break;
     }
     default:
+      // HollywoodAkeem music instrumentation (2026-07-06): count readbacks of
+      // the 0x0601 lock register at INFO. The title cycles 27k+ lock writes
+      // (2/3) with ZERO context kicks during silent music; if it also READS
+      // 0601 expecting the hardware to answer (lock-grant handshake), our
+      // echo of the last-written value may be what stalls the XMA feed loop.
+      if (r == 0x0601) {
+        static std::atomic<uint64_t> lock_read_count{0};
+        uint64_t n = lock_read_count.fetch_add(1, std::memory_order_relaxed) + 1;
+        if (n <= 10 || n % 5000 == 0) {
+          REXAPU_INFO("[XMA 0601 READ] #{} (current stored value={:08X})", n,
+                      rex::byte_swap(register_file_[r]));
+        }
+        break;
+      }
       const auto register_info = register_file_.GetRegisterInfo(r);
       if (register_info) {
         REXAPU_DEBUG("XMA: Read from unhandled register ({:04X}, {})", r, register_info->name);
@@ -282,6 +357,20 @@ void XmaDecoder::WriteRegister(uint32_t addr, uint32_t value) {
     // This will kick off the given hardware contexts.
     // Basically, this kicks the SPU and says "hey, decode that audio!"
     // XMAEnableContext
+
+    // HollywoodAkeem music instrumentation (2026-07-06): kicks were entirely
+    // unlogged (only unknown-register writes were), so we couldn't tell
+    // whether streamed-music XMA contexts ever get kicked. First 20 kicks
+    // log individually with context ids; afterwards every 500th logs the
+    // running total.
+    static std::atomic<uint64_t> kick_count{0};
+    uint64_t kick_n = kick_count.fetch_add(1, std::memory_order_relaxed) + 1;
+    if (kick_n <= 20) {
+      REXAPU_INFO("[XMA KICK] #{} reg={:04X} mask={:08X} (base ctx {})", kick_n, r, value,
+                  (r - XmaRegister::Context0Kick) * 32);
+    } else if (kick_n % 500 == 0) {
+      REXAPU_INFO("[XMA KICK] total={} (mask={:08X})", kick_n, value);
+    }
 
     // The context ID is a bit in the range of the entire context array.
     uint32_t base_context_id = (r - XmaRegister::Context0Kick) * 32;

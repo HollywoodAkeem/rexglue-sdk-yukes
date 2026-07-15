@@ -24,6 +24,9 @@
 #include <rex/thread.h>
 #include <rex/cvar.h>
 
+#include <atomic>
+#include <chrono>
+
 REXCVAR_DEFINE_INT32(
     audio_maxqframes, 8, "Audio",
     "Max buffered audio frames (range 4-64). Lower reduces latency but may cause stuttering.");
@@ -92,13 +95,74 @@ X_STATUS AudioSystem::Setup(system::KernelState* kernel_state) {
   return X_STATUS_SUCCESS;
 }
 
+// HollywoodAkeem music instrumentation (2026-07-06): unthrottled per-second
+// pump health counters. The old diag logs were first-N throttled, which made
+// it impossible to tell "pump stalled" from "pump fine, logs exhausted"
+// during the WWE 2K14 music-silence investigation.
+static std::atomic<uint64_t> g_pump_dispatched{0};
+static std::atomic<uint64_t> g_pump_submitted{0};
+// Peak meters over submitted guest frames (float-bit encodings; reset each
+// summary). "swapped" treats guest floats as big-endian (expected for X360),
+// "raw" treats them as-is — logging both sidesteps and diagnoses endianness.
+static std::atomic<uint32_t> g_peak_swapped_bits{0};
+static std::atomic<uint32_t> g_peak_raw_bits{0};
+// NaN/denormal tell: recompiled-DSP numerical corruption fills frames with
+// NaNs which the peak meter deliberately skips — count them separately so
+// "all-NaN" and "all-zero" frames are distinguishable.
+static std::atomic<uint64_t> g_nan_samples{0};
+static std::atomic<uint64_t> g_nonzero_samples{0};
+
+static void atomic_max_float(std::atomic<uint32_t>& slot, float v) {
+  uint32_t new_bits;
+  std::memcpy(&new_bits, &v, sizeof(v));
+  uint32_t cur = slot.load(std::memory_order_relaxed);
+  for (;;) {
+    float cur_f;
+    std::memcpy(&cur_f, &cur, sizeof(cur_f));
+    if (!(v > cur_f)) {
+      return;
+    }
+    if (slot.compare_exchange_weak(cur, new_bits, std::memory_order_relaxed)) {
+      return;
+    }
+  }
+}
+
+static float take_peak(std::atomic<uint32_t>& slot) {
+  uint32_t bits = slot.exchange(0, std::memory_order_relaxed);
+  float f;
+  std::memcpy(&f, &bits, sizeof(f));
+  return f;
+}
+
 void AudioSystem::WorkerThreadMain() {
   // Initialize driver and ringbuffer.
   Initialize();
 
   // Main run loop.
   uint32_t diag_pump_count = 0;
+  auto pump_stat_t0 = std::chrono::steady_clock::now();
+  uint64_t pump_stat_dispatched0 = 0;
+  uint64_t pump_stat_submitted0 = 0;
   while (worker_running_) {
+    // [AUDIO PUMP] one summary line per ~second (worker wakes at least every
+    // 500 ms via the WaitAny timeout, so cadence holds even when idle).
+    {
+      auto now = std::chrono::steady_clock::now();
+      if (now - pump_stat_t0 >= std::chrono::seconds(1)) {
+        uint64_t d = g_pump_dispatched.load(std::memory_order_relaxed);
+        uint64_t s = g_pump_submitted.load(std::memory_order_relaxed);
+        REXAPU_INFO("[AUDIO PUMP] dispatched={}/s submitted={}/s peak_be={:.6f} peak_raw={:.6f} "
+                    "nan={}/s nonzero={}/s (totals d={} s={})",
+                    d - pump_stat_dispatched0, s - pump_stat_submitted0,
+                    take_peak(g_peak_swapped_bits), take_peak(g_peak_raw_bits),
+                    g_nan_samples.exchange(0, std::memory_order_relaxed),
+                    g_nonzero_samples.exchange(0, std::memory_order_relaxed), d, s);
+        pump_stat_dispatched0 = d;
+        pump_stat_submitted0 = s;
+        pump_stat_t0 = now;
+      }
+    }
     // These handles signify the number of submitted samples. Once we reach
     // 64 samples, we wait until our audio backend releases a semaphore
     // (signaling a sample has finished playing)
@@ -141,6 +205,7 @@ void AudioSystem::WorkerThreadMain() {
                        client_callback, client_callback_arg, index);
         }
         SCOPE_profile_cpu_i("apu", "rex::audio::AudioSystem->client_callback");
+        g_pump_dispatched.fetch_add(1, std::memory_order_relaxed);
         uint64_t args[] = {client_callback_arg};
         function_dispatcher_->Execute(worker_thread_->thread_state(), client_callback, args,
                                       rex::countof(args));
@@ -256,6 +321,45 @@ void AudioSystem::SubmitFrame(size_t index, uint32_t samples_ptr) {
     REXAPU_DEBUG("AudioSystem::SubmitFrame called: index={} samples_ptr={:08X}", index,
                  samples_ptr);
     submit_count++;
+  }
+  g_pump_submitted.fetch_add(1, std::memory_order_relaxed);
+
+  // Peak-meter the guest frame (256 samples x 6 channels of float PCM).
+  // Discriminates "guest submits digital silence" (music muted/zeroed guest-
+  // side) from "guest submits audio the host loses" during the WWE 2K14
+  // music-silence investigation.
+  {
+    const uint8_t* frame_bytes = memory()->TranslateVirtual(samples_ptr);
+    if (frame_bytes) {
+      constexpr size_t kMeterFloats = 256 * 6;
+      float peak_be = 0.0f;
+      float peak_raw = 0.0f;
+      uint64_t nan_count = 0;
+      uint64_t nonzero_count = 0;
+      for (size_t i = 0; i < kMeterFloats; ++i) {
+        uint32_t bits_raw;
+        std::memcpy(&bits_raw, frame_bytes + i * 4, sizeof(bits_raw));
+        uint32_t bits_be = rex::byte_swap(bits_raw);
+        float f_raw, f_be;
+        std::memcpy(&f_raw, &bits_raw, sizeof(f_raw));
+        std::memcpy(&f_be, &bits_be, sizeof(f_be));
+        if (bits_be != 0) {
+          nonzero_count++;
+        }
+        f_raw = std::abs(f_raw);
+        f_be = std::abs(f_be);
+        if (f_be != f_be) {
+          nan_count++;  // NaN in the big-endian (real) interpretation
+        }
+        // Guard NaN/inf from the wrong-endianness interpretation.
+        if (f_be == f_be && f_be <= 16.0f && f_be > peak_be) peak_be = f_be;
+        if (f_raw == f_raw && f_raw <= 16.0f && f_raw > peak_raw) peak_raw = f_raw;
+      }
+      atomic_max_float(g_peak_swapped_bits, peak_be);
+      atomic_max_float(g_peak_raw_bits, peak_raw);
+      g_nan_samples.fetch_add(nan_count, std::memory_order_relaxed);
+      g_nonzero_samples.fetch_add(nonzero_count, std::memory_order_relaxed);
+    }
   }
 
   auto global_lock = global_critical_region_.Acquire();

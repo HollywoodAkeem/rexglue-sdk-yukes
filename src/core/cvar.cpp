@@ -64,6 +64,10 @@ void ApplyTomlTable(const toml::table& table, const std::string& prefix) {
 
     if (value.is_table()) {
       ApplyTomlTable(*value.as_table(), full_key);
+    } else if (value.is_array()) {
+      // Arrays aren't flat cvars; they belong to dedicated consumers
+      // (e.g. [[patches]] -> ApplyMemoryPatches). Skip silently.
+      continue;
     } else {
       std::string value_str;
       if (value.is_boolean()) {

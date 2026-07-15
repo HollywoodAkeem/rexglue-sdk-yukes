@@ -405,6 +405,9 @@ X_HRESULT XmpApp::DispatchMessageSync(uint32_t message, uint32_t buffer_ptr,
                     uint32_t(args->playback_client));
 
       playback_client_ = PlaybackClient(uint32_t(args->playback_client));
+      // HollywoodAkeem (2026-07-06): remember the raw controller value so
+      // XMPGetPlaybackController can echo it (see header comment).
+      playback_controller_ = uint32_t(args->controller);
       kernel_state_->BroadcastNotification(kMsgPlaybackControllerChanged, !args->playback_client);
       return X_E_SUCCESS;
     }
@@ -425,16 +428,21 @@ X_HRESULT XmpApp::DispatchMessageSync(uint32_t message, uint32_t buffer_ptr,
       // XNotifyListener, so kMsgPlaybackControllerChanged broadcasts have
       // nowhere to deliver. The flag at *(0x83ACFD34)[0] must be flipped by
       // direct memory write from some other path -- TBD.)
-      // HollywoodAkeem: return the actual current playback_client_ (set by
-      // XMPSetPlaybackController) instead of a hardcoded 0. WWE 13's init
-      // worker (sub_82395508) polls this in a tight loop waiting to observe
-      // the controller value it just set; with the old stub it always saw 0
-      // and spun forever, blocking the main thread's WaitForSingleObject on
-      // the init-complete event. Default constructor seeds playback_client_
-      // to kTitle (1), so titles that don't bother to SET before GET still
-      // see "title is the controller" and move on.
+      //
+      // HollywoodAkeem (2026-07-06, WWE 2K14 music-mute fix): return the raw
+      // `controller` value from XMPSetPlaybackController, defaulting to 0
+      // ("the TITLE owns playback" — matches Xenia's stock hardcoded 0).
+      // History: the 0.7.6-era WWE 13 fix returned playback_client_ here
+      // (seeded kTitle=1) so WWE 13's init worker (sub_82395508) would see
+      // the value it had just set instead of spinning forever on the old
+      // hardcoded 0. But WWE 2K14 GETs without ever SETting — it read that
+      // seeded 1 as "the user's custom soundtrack controls playback" and
+      // courteously MUTED its own music while still decoding it (perfect
+      // digital-zero frames at real-time stream consumption). Echoing the
+      // set value satisfies both: WWE 13 sets 1 → polls → reads 1; 2K14
+      // never sets → reads 0 → plays its music.
       memory::store_and_swap<uint32_t>(memory_->TranslateVirtual(args->controller_ptr),
-                                       static_cast<uint32_t>(playback_client_));
+                                       playback_controller_);
       memory::store_and_swap<uint32_t>(memory_->TranslateVirtual(args->locked_ptr), 0);
 
       if (!XThread::GetCurrentThread()->main_thread()) {

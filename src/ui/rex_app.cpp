@@ -33,6 +33,7 @@
 #include <rex/kernel/init.h>
 #include <rex/system.h>
 #include <rex/system/kernel_state.h>
+#include <rex/system/memory_patch.h>
 #include <rex/system/xthread.h>
 #include <rex/ui/graphics_provider.h>
 #include <rex/ui/keybinds.h>
@@ -123,11 +124,24 @@ bool ReXApp::SetupEnvironment() {
     user_dir = rex::filesystem::GetUserFolder() / GetName();
   }
 
-  // Update data: cvar override, or empty (opt-in)
+  // Update data: cvar override, otherwise default to <exe-dir>/update when
+  // that folder exists (mirrors the <exe-dir>/assets convention above).
+  // HollywoodAkeem (2026-07-07): the update: mount is a per-file override
+  // layer — the guest checks update:\<path> before game:\<path> with clean
+  // fallback — which makes it a natural MOD overlay, not just for official
+  // title updates. End-user story: drop the exe anywhere, game rip in
+  // `assets/`, optional title update AND any modded files in `update/` —
+  // no toml editing required. Absent folder = no mount (pure disc
+  // experience), same as before.
   std::filesystem::path update_dir;
   std::string update_data_cvar = REXCVAR_GET(update_data_root);
   if (!update_data_cvar.empty()) {
     update_dir = update_data_cvar;
+  } else {
+    auto default_update = exe_dir / "update";
+    if (std::filesystem::is_directory(default_update)) {
+      update_dir = default_update;
+    }
   }
 
   // Devkit data (mounted as e:\): cvar override, or empty (opt-in)
@@ -308,6 +322,14 @@ bool ReXApp::ConstructRuntime(const PathConfig& paths) {
   }
 
   OnPostLoadXexImage();
+
+  // Apply per-title [[patches]] from <project>.toml to the resident XEX image
+  // (code/rodata pokes) before the module runs. Reusable SDK facility so mods
+  // that must alter the executable don't require editing default.xex.
+  if (runtime_->kernel_state()) {
+    rex::system::ApplyMemoryPatches(runtime_.get(), config_path_,
+                                    runtime_->kernel_state()->title_id());
+  }
 
   if (ppc_info_.rexcrt_heap) {
     if (!rex::kernel::crt::InitHeap(REXCVAR_GET(rexcrt_heap_size_mb), runtime_->memory())) {

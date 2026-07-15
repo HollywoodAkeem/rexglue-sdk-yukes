@@ -98,6 +98,15 @@ class XmpApp : public system::xam::App {
 
   State state_;
   PlaybackClient playback_client_;
+  // HollywoodAkeem (2026-07-06): the raw `controller` value from
+  // XMPSetPlaybackController, returned verbatim by XMPGetPlaybackController.
+  // In this API's convention 0 = "the TITLE owns playback" (Xenia stock
+  // hardcoded 0 here). Returning playback_client_ (kTitle=1) instead — the
+  // 0.7.6-era WWE 13 fix — made WWE 2K14 read "user music owns playback"
+  // and mute its own music while streaming it silently. Storing/returning
+  // the set value satisfies both titles: WWE 13 sets 1 and polls until it
+  // reads 1 back; 2K14 never sets and reads the default 0.
+  uint32_t playback_controller_ = 0;
   PlaybackMode playback_mode_;
   RepeatMode repeat_mode_;
   uint32_t unknown_flags_;
