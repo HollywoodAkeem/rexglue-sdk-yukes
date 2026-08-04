@@ -107,7 +107,16 @@ u32 XamContentCreateEnumerator_entry(u32 user_index, u32 device_id, u32 content_
     // TODO(gibbed): disc drive content
   }
 
-  REXKRNL_DEBUG("XamContentCreateEnumerator: added {} items to enumerator", e->item_count());
+  // Marketplace (DLC) enumeration is rare and load-bearing for content
+  // debugging: receipt at INFO. Other types (saves enumerate constantly)
+  // stay at DEBUG.
+  if (content_type == uint32_t(XContentType::kMarketplaceContent)) {
+    REXKRNL_INFO("XamContentCreateEnumerator: user={} device={} type={:08X} -> {} item(s)",
+                 user_index, device_id, content_type, e->item_count());
+  } else {
+    REXKRNL_DEBUG("XamContentCreateEnumerator: added {} items to enumerator (type={:08X})",
+                  e->item_count(), content_type);
+  }
 
   *handle_out = e->handle();
   return X_ERROR_SUCCESS;

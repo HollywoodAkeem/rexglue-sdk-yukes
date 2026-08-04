@@ -34,6 +34,7 @@
 #include <rex/system.h>
 #include <rex/system/kernel_state.h>
 #include <rex/system/memory_patch.h>
+#include <rex/system/xam/content_install.h>
 #include <rex/system/xthread.h>
 #include <rex/ui/graphics_provider.h>
 #include <rex/ui/keybinds.h>
@@ -329,6 +330,15 @@ bool ReXApp::ConstructRuntime(const PathConfig& paths) {
   if (runtime_->kernel_state()) {
     rex::system::ApplyMemoryPatches(runtime_.get(), config_path_,
                                     runtime_->kernel_state()->title_id());
+  }
+
+  // Install per-title [[content_install]] STFS packages from <project>.toml
+  // into the user-data content tree (DLC on-ramp). One-shot: entries whose
+  // package dir + .header already exist are skipped. Silent no-op when the
+  // section is absent, so projects without it are unaffected.
+  if (runtime_->kernel_state()) {
+    rex::system::xam::InstallContentFromConfig(runtime_->kernel_state(), config_path_,
+                                               runtime_->kernel_state()->title_id());
   }
 
   if (ppc_info_.rexcrt_heap) {

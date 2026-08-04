@@ -572,9 +572,12 @@ u32 NtCreateEvent_entry(mapped_u32 handle_ptr, ppc_ptr_t<X_OBJECT_ATTRIBUTES> ob
   // HollywoodAkeem: log every event creation. We need to map handles to
   // who-created-them when figuring out which event a stuck thread is waiting
   // on. Cheap: NtCreateEvent fires <100x in typical game init.
+  // 2026-07-17: demoted WARN -> DEBUG (audio-era instrumentation; at warn it
+  // survives the log.levels krnl="warn" toml and was 22k lines/session in
+  // wwe2k14. Re-enable via krnl="debug" when event-tracing is needed.)
   {
     auto* th = XThread::GetCurrentThread();
-    REXKRNL_WARN("[EVENT CREATE] handle={:08X} type={} initial={} caller='{}' (h={:08X})",
+    REXKRNL_DEBUG("[EVENT CREATE] handle={:08X} type={} initial={} caller='{}' (h={:08X})",
                  ev->handle(), event_type ? "auto" : "manual",
                  initial_state ? "signaled" : "non-signaled", th ? th->name() : "<unknown>",
                  th ? static_cast<uint32_t>(th->handle()) : 0u);
@@ -596,8 +599,9 @@ uint32_t xeNtSetEvent(uint32_t handle, rex::be<uint32_t>* previous_state_ptr) {
     ++n;
     if (n <= 3 || (n % 100) == 0) {
       auto* th = XThread::GetCurrentThread();
-      REXKRNL_WARN("[EVENT SET] handle={:08X} #{} caller='{}' (h={:08X})", handle, n,
-                   th ? th->name() : "<unknown>", th ? static_cast<uint32_t>(th->handle()) : 0u);
+      // 2026-07-17: demoted WARN -> DEBUG (see [EVENT CREATE] note above).
+      REXKRNL_DEBUG("[EVENT SET] handle={:08X} #{} caller='{}' (h={:08X})", handle, n,
+                    th ? th->name() : "<unknown>", th ? static_cast<uint32_t>(th->handle()) : 0u);
     }
   }
 

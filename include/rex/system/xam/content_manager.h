@@ -180,8 +180,19 @@ class ContentManager {
 
   // Installs an STFS content package from an arbitrary host path.
   // Extracts the package into root_path_/0000000000000000/{title_id}/00000002/{filename}/
-  // and writes a .header file for XAM enumeration.
-  X_RESULT InstallContent(const std::filesystem::path& package_path);
+  // and writes a .header file (XCONTENT_AGGREGATE_DATA + u32 license mask) for
+  // XAM enumeration. One-shot by default: when both the install directory and
+  // its .header already exist, returns X_ERROR_ALREADY_EXISTS without touching
+  // disk. A directory without its .header counts as a partial install and is
+  // re-extracted. Pass overwrite=true to force re-extraction unconditionally.
+  // dlc_guard=true additionally runs the title-specific [DLC-GUARD] rule
+  // engine (content_install.cpp) on the freshly extracted tree BEFORE the
+  // .header is written, so retail DLC can never clobber recomp-added
+  // content. [[content_install]] entries can disable it with
+  // dlc_guard = false (debugging only). A guard I/O failure aborts
+  // pre-header = partial install = re-extracted and re-guarded next boot.
+  X_RESULT InstallContent(const std::filesystem::path& package_path, bool overwrite = false,
+                          bool dlc_guard = true);
 
  private:
   std::filesystem::path ResolvePackageRoot(uint64_t xuid, XContentType content_type,

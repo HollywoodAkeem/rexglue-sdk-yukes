@@ -23,6 +23,7 @@
 #include <rex/system/kernel_state.h>
 #include <rex/logging.h>
 #include <rex/system/xam/content_device.h>
+#include <rex/system/xam/content_install.h>
 #include <rex/system/xam/content_manager.h>
 #include <rex/system/xfile.h>
 #include <rex/system/xobject.h>
@@ -583,14 +584,17 @@ static X_RESULT ExtractEntry(rex::filesystem::Entry* entry,
   return X_ERROR_SUCCESS;
 }
 
-X_RESULT ContentManager::InstallContent(const std::filesystem::path& package_path) {
+X_RESULT ContentManager::InstallContent(const std::filesystem::path& package_path,
+                                        bool overwrite, bool dlc_guard) {
   if (!std::filesystem::exists(package_path)) {
+    REXSYS_ERROR("[CONTENT-INSTALL] package not found: '{}'", package_path.string());
     return X_ERROR_FILE_NOT_FOUND;
   }
 
   // Mount the STFS package as a virtual filesystem device
   auto device = std::make_unique<rex::filesystem::StfsContainerDevice>("", package_path);
   if (!device->Initialize()) {
+    REXSYS_ERROR("[CONTENT-INSTALL] STFS mount failed for '{}'", package_path.string());
     return X_ERROR_ACCESS_DENIED;
   }
 
@@ -614,17 +618,37 @@ X_RESULT ContentManager::InstallContent(const std::filesystem::path& package_pat
   }
 
   auto install_path = ResolvePackagePath(0, content_data);
+  auto header_path = ResolvePackageHeaderPath(file_name, 0, content_data.title_id,
+                                              content_data.content_type);
+
+  // One-shot semantics: a completed install = payload dir + .header both
+  // present; skip unless the caller forces overwrite. A dir WITHOUT its
+  // .header is a partial install (would enumerate but open with license 0),
+  // so fall through and re-extract.
+  if (!overwrite && std::filesystem::exists(install_path) &&
+      std::filesystem::exists(header_path)) {
+    REXSYS_WARN("[CONTENT-INSTALL] '{}' already installed at '{}' - skipped (one-shot)",
+                file_name, install_path.string());
+    return X_ERROR_ALREADY_EXISTS;
+  }
+
+  REXSYS_WARN("[CONTENT-INSTALL] installing '{}' -> '{}'", package_path.string(),
+              install_path.string());
 
   // Create destination directory
   std::error_code ec;
   std::filesystem::create_directories(install_path, ec);
   if (ec) {
+    REXSYS_ERROR("[CONTENT-INSTALL] mkdir failed for '{}': {}", install_path.string(),
+                 ec.message());
     return X_ERROR_ACCESS_DENIED;
   }
 
   // Extract all files breadth-first
   auto* root = device->ResolvePath("");
   if (!root) {
+    REXSYS_ERROR("[CONTENT-INSTALL] STFS root resolve failed for '{}'",
+                 package_path.string());
     return X_ERROR_ACCESS_DENIED;
   }
 
@@ -641,7 +665,25 @@ X_RESULT ContentManager::InstallContent(const std::filesystem::path& package_pat
 
     auto result = ExtractEntry(entry, install_path);
     if (result != X_ERROR_SUCCESS) {
+      REXSYS_ERROR("[CONTENT-INSTALL] extract failed ({:08X}) under '{}'", result,
+                   install_path.string());
       return result;
+    }
+  }
+
+  // DLC guard (design law): retail DLC must never damage recomp-added
+  // content. Neutralize title-specific conflicts in the extracted tree NOW,
+  // before the .header lands: a guard failure returns here and leaves the
+  // payload dir header-less = partial install per the one-shot check above,
+  // so the next boot re-extracts and re-guards cleanly.
+  if (dlc_guard) {
+    auto guard_result =
+        ApplyDlcGuardRules(install_path, file_name, kernel_state_->title_id());
+    if (guard_result != X_ERROR_SUCCESS) {
+      REXSYS_ERROR("[DLC-GUARD] '{}': I/O failure ({:08X}) while guarding - "
+                   "install aborted pre-header for clean retry",
+                   file_name, guard_result);
+      return guard_result;
     }
   }
 
@@ -653,8 +695,22 @@ X_RESULT ContentManager::InstallContent(const std::filesystem::path& package_pat
     }
   }
 
+  if (license_mask == 0) {
+    REXSYS_WARN("[CONTENT-INSTALL] '{}': license table empty -> mask 0; header will be "
+                "written WITHOUT mask bytes and unlock-style packages grant nothing",
+                file_name);
+  }
+
   // Write .header file
-  return WriteContentHeaderFile(0, content_data, license_mask);
+  auto header_result = WriteContentHeaderFile(0, content_data, license_mask);
+  if (header_result == X_ERROR_SUCCESS) {
+    REXSYS_WARN("[CONTENT-INSTALL] '{}' installed OK (license_mask=0x{:08X}, header='{}')",
+                file_name, license_mask, header_path.string());
+  } else {
+    REXSYS_ERROR("[CONTENT-INSTALL] '{}': header write failed ({:08X})", file_name,
+                 header_result);
+  }
+  return header_result;
 }
 
 }  // namespace xam
