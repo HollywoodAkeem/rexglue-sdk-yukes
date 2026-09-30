@@ -422,3 +422,6 @@ CMakeUserPresets.json
 
 
 wwe2k14/
+
+# Option B render-arc diagnostics (2026-09-30): pristine-source backups, probe patchers, notes, revert script
+_optionB_backup/
